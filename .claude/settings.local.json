@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/borr/Desktop/claude/glados -type f \\\\\\( -name \"*.json\" -o -name \"*.yml\" -o -name \"*.yaml\" -o -name \"*.plist\" -o -name \"*.config\" \\\\\\) -exec ls -la {} \\\\;)"
+    ]
+  }
+}

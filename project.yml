@@ -1,0 +1,77 @@
+name: sciFM
+options:
+  bundleIdPrefix: com.borr
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "15.0"
+
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    DEVELOPMENT_TEAM: 3YXDKVW3JB
+
+targets:
+  sciFM:
+    type: application
+    platform: iOS
+    sources:
+      - path: Glados
+        excludes:
+          - ShareExtension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.borr.scifm
+        INFOPLIST_FILE: Glados/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    entitlements:
+      path: Glados/Glados.entitlements
+    dependencies:
+      - sdk: AVFoundation.framework
+      - sdk: NaturalLanguage.framework
+      - sdk: Security.framework
+      - sdk: PDFKit.framework
+      - sdk: MediaPlayer.framework
+      - target: ShareExtension
+        embed: true
+        link: false
+        codeSignOnCopy: true
+
+  ShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Glados/ShareExtension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.borr.scifm.share
+        INFOPLIST_FILE: Glados/ShareExtension/Info.plist
+        CODE_SIGN_STYLE: Automatic
+    entitlements:
+      path: Glados/ShareExtension/ShareExtension.entitlements
+
+  sciFMTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: GladosTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: sciFM
+
+schemes:
+  sciFM:
+    build:
+      targets:
+        sciFM: all
+        ShareExtension: all
+        sciFMTests: [test]
+    test:
+      targets:
+        - sciFMTests
+    run:
+      config: Debug
+    archive:
+      config: Release
