@@ -235,9 +235,9 @@ final class PlayerViewModel: ObservableObject {
     }
 
     /// Plays a short text (e.g. an abstract) directly without the full article pipeline.
-    /// Reads a short text (abstract/briefing). When `tidy` is true, the text is
-    /// run through the article strip + LLM tidy first (used for scraped briefings).
-    func readText(_ text: String, title: String, tidy: Bool = false) {
+    /// Reads a short, already-resolved text (abstract/briefing/generated summary).
+    /// Feed read-text resolution lives in `FeedManager.readingText(for:)`.
+    func readText(_ text: String, title: String) {
         if let id = currentLibraryItemID {
             let t = player.currentTime
             Task { await LibraryManager.shared.updateLastPlayedTime(id, time: t) }
@@ -248,12 +248,7 @@ final class PlayerViewModel: ObservableObject {
         articleTitle = title; errorMessage = nil
         Task {
             do {
-                var source = text
-                if tidy {
-                    status = .cleaning
-                    source = await FeedManager.shared.tidyForReading(text, title: title)
-                }
-                let chunks = TextChunker.chunk(ScientificPronunciation.rewrite(source))
+                let chunks = TextChunker.chunk(ScientificPronunciation.rewrite(text))
                 var allPCM = Data()
                 var cumulativeTime: TimeInterval = 0
                 var built: [SentenceTimestamp] = []

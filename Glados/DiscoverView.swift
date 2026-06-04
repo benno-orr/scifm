@@ -45,11 +45,14 @@ struct DiscoverView: View {
             .sheet(item: $selectedArticle) { article in
                 ArticleDetailSheet(
                     article: article,
-                    onReadAbstract: { abstract in
+                    onReadAbstract: { _ in
                         selectedArticle = nil
-                        viewModel.readText(abstract, title: article.title,
-                                           tidy: article.label == "Research Briefing")
                         selectedTab = 0
+                        viewModel.status = .fetching
+                        Task {
+                            let text = await FeedManager.shared.readingText(for: article)
+                            viewModel.readText(text, title: article.title)
+                        }
                     },
                     onReadFull: {
                         selectedArticle = nil
@@ -79,14 +82,7 @@ struct DiscoverView: View {
     }
 
     private func resolveAbstract(_ article: FeedArticle) async -> String {
-        // Scraped Nature briefings: strip + LLM tidy, like the full-article pipeline.
-        if article.label == "Research Briefing" {
-            return await FeedManager.shared.tidyForReading(article.summary, title: article.title)
-        }
-        if article.doi != nil, let abstract = await FeedManager.shared.fetchAbstract(for: article) {
-            return abstract
-        }
-        return article.summary
+        await FeedManager.shared.readingText(for: article)
     }
 }
 

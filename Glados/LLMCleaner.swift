@@ -56,6 +56,24 @@ actor LLMCleaner {
         return await call(system: prompt, user: userContent) ?? "\(legendText) \(contextBlock)"
     }
 
+    // MARK: - Summary generation
+
+    /// Writes a short plain-language summary from article text, for items whose
+    /// feed provides no real abstract. Returns nil if no LLM provider is set or
+    /// the call fails.
+    func summarize(title: String, text: String) async -> String? {
+        guard AppSettings.llmProvider != .none else { return nil }
+        let prompt = """
+        You are writing a concise, plain-language summary of a scientific article for audio playback. \
+        Using ONLY the article text provided, write 3 to 5 sentences explaining what the work found and \
+        why it matters. Do not invent details, numbers, or claims that are not in the text. Do not mention \
+        figures, tables, references, or the article's structure. Write flowing prose suitable for narration, \
+        with no headings or lists. Return ONLY the summary text.
+        """
+        let body = String(text.prefix(12000))
+        return await call(system: prompt, user: "Title: \(title)\n\nArticle text:\n\(body)")
+    }
+
     // MARK: - Routing
 
     private func call(system: String, user: String) async -> String? {

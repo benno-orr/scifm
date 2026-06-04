@@ -78,6 +78,21 @@ actor ArticleProcessor {
         return nil
     }
 
+    /// Fetches an article page and returns its readable body text (stripped &
+    /// cleaned), or nil if the page can't be fetched or yields too little text
+    /// (e.g. a JS/Cloudflare challenge page). Used to summarize items whose feed
+    /// gives no real abstract.
+    func fetchBodyText(url: URL) async -> String? {
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                         forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        else { return nil }
+        let body = await cleanText(extractArticleTextFromHTML(html))
+        return body.count > 400 ? body : nil
+    }
+
     func cleanText(_ text: String) async -> String {
         var result = text
         result = truncateAtReferences(result)

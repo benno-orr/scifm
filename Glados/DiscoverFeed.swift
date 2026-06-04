@@ -40,7 +40,8 @@ actor FeedManager {
     static let shared = FeedManager()
 
     private var thumbnailCache: [String: URL] = [:]
-    private let briefingProcessor = ArticleProcessor()
+    private var summaryCache: [String: String] = [:]
+    private let articleProcessor = ArticleProcessor()
 
     private let reviewSources: [FeedSource] = [
         FeedSource(
@@ -172,12 +173,51 @@ actor FeedManager {
         return out
     }
 
+    /// Best text to narrate for a feed article:
+    /// 1. Research Briefings — their scraped plain-language summary, tidied like an article.
+    /// 2. A real abstract (PubMed via DOI) when one exists.
+    /// 3. A substantial RSS summary.
+    /// 4. Otherwise (e.g. Science Perspectives, whose feed gives only "Volume X, Page Y",
+    ///    or a News & Views with no abstract) — fetch the article and write an LLM summary.
+    func readingText(for article: FeedArticle) async -> String {
+        if article.label == "Research Briefing" {
+            return await tidyForReading(article.summary, title: article.title)
+        }
+        if article.doi != nil, let abstract = await fetchAbstract(for: article),
+           Self.isSubstantial(abstract) {
+            return abstract
+        }
+        if Self.isSubstantial(article.summary) { return article.summary }
+        return await generatedSummary(for: article)
+    }
+
     /// Cleans a scraped briefing summary for narration the same way full articles
     /// are prepared: strip citations/figure refs, then the LLM tidy pass.
     /// `LLMCleaner.clean` is a no-op (returns input) when no LLM provider is set.
     func tidyForReading(_ text: String, title: String) async -> String {
-        let stripped = await briefingProcessor.cleanText(text)
+        let stripped = await articleProcessor.cleanText(text)
         return await LLMCleaner.shared.clean(title: title, text: stripped)
+    }
+
+    /// Fetches the article page and writes an LLM summary. Falls back to the
+    /// article's own summary (or title) when the page can't be fetched
+    /// (e.g. Cloudflare-walled) or no LLM provider is configured.
+    private func generatedSummary(for article: FeedArticle) async -> String {
+        let key = article.url.absoluteString
+        if let cached = summaryCache[key] { return cached }
+        if let body = await articleProcessor.fetchBodyText(url: article.url),
+           let summary = await LLMCleaner.shared.summarize(title: article.title, text: body),
+           Self.isSubstantial(summary) {
+            summaryCache[key] = summary
+            return summary
+        }
+        return Self.isSubstantial(article.summary) ? article.summary : article.title
+    }
+
+    /// True when text has enough words to be a real summary rather than
+    /// bibliographic boilerplate ("Science, Volume 392, Issue 6801, Page 919…").
+    private static func isSubstantial(_ s: String) -> Bool {
+        s.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).count >= 20
     }
 
     private static func firstGroup(_ pattern: String, _ s: String) -> String? {
