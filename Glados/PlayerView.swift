@@ -44,6 +44,11 @@ final class PlayerViewModel: ObservableObject {
         player.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        player.onPlaybackFinished = { [weak self] in
+            guard let self, let id = self.currentLibraryItemID else { return }
+            let full = self.player.duration
+            Task { await LibraryManager.shared.updateLastPlayedTime(id, time: full) }
+        }
     }
 
     func load(url: URL) {

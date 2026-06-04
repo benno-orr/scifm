@@ -15,6 +15,17 @@ struct LibraryItem: Codable, Identifiable {
     var audioFileName: String
     var sentences: [StoredSentence]
     var lastPlayedTime: TimeInterval
+
+    /// Fraction listened, 0...1.
+    var progressFraction: Double {
+        guard duration > 0 else { return 0 }
+        return min(1, max(0, lastPlayedTime / duration))
+    }
+
+    /// "Read" once playback has reached the final stretch; otherwise "Reading".
+    var isFinished: Bool {
+        duration > 0 && lastPlayedTime >= duration * 0.97
+    }
 }
 
 struct StoredSentence: Codable {

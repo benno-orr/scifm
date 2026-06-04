@@ -85,15 +85,11 @@ actor FeedManager {
         ),
     ]
 
+    // Digest = Nature Research Briefings (scraped, plain-language summaries)
+    // plus Science Perspectives and Cell highlights from RSS.
+    // The Nature RSS feed routes through an auth/cookie redirect that URLSession
+    // can't reliably follow, so the briefings are scraped from the HTML listing.
     private let sources: [FeedSource] = [
-        // d41586 DOIs are Nature editorial (Research Analysis, News & Views, News, Comment)
-        // s41586 DOIs are original research — excluded via urlMustContain
-        FeedSource(
-            name: "Nature", label: "Research Analysis",
-            rssURL: URL(string: "https://www.nature.com/nature/rss/research-analysis")!,
-            urlMustContain: "/articles/d41586-",
-            dcTypesAllowed: nil
-        ),
         // Science Perspectives and In Depth are their N&V equivalents
         FeedSource(
             name: "Science", label: "Perspectives",
@@ -110,6 +106,8 @@ actor FeedManager {
         ),
     ]
 
+    private static let iPhoneUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+
     func fetchReviews() async -> [FeedArticle] {
         await withTaskGroup(of: [FeedArticle].self) { group in
             for source in reviewSources {
@@ -123,6 +121,7 @@ actor FeedManager {
 
     func fetchAll() async -> [FeedArticle] {
         await withTaskGroup(of: [FeedArticle].self) { group in
+            group.addTask { await self.scrapeNatureBriefings() }
             for source in sources {
                 group.addTask { await self.fetch(source: source) }
             }
@@ -130,6 +129,63 @@ actor FeedManager {
             for await articles in group { all.append(contentsOf: articles) }
             return all.sorted { ($0.publishedDate ?? .distantPast) > ($1.publishedDate ?? .distantPast) }
         }
+    }
+
+    // MARK: - Nature Research Briefings (HTML scrape)
+
+    /// Scrapes Nature's Research Briefing listing — short, plain-language digests
+    /// of recent papers. Returns newest-first FeedArticles with the briefing text
+    /// as the summary (read directly, no DOI/abstract round-trip needed).
+    func scrapeNatureBriefings() async -> [FeedArticle] {
+        guard let url = URL(string: "https://www.nature.com/nature/articles?type=research-briefing") else { return [] }
+        var request = URLRequest(url: url)
+        request.setValue(Self.iPhoneUA, forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        else { return [] }
+
+        var out: [FeedArticle] = []
+        var seen = Set<String>()
+        // Each article card is an <article> ... block on the listing page.
+        for block in html.components(separatedBy: "<article").dropFirst() {
+            guard let link = Self.firstGroup(#"href="(/articles/d41586-[^"]+)""#, block),
+                  !seen.contains(link),
+                  let rawTitle = Self.firstGroup(#"name headline">\s*<a\b[^>]*>(.*?)</a>"#, block)
+            else { continue }
+            let title = Self.decodeEntities(rawTitle.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, let articleURL = URL(string: "https://www.nature.com\(link)") else { continue }
+            seen.insert(link)
+
+            let dateStr = Self.firstGroup(#"datetime="([^"]+)""#, block) ?? ""
+            let rawDesc = Self.firstGroup(#"data-test="article-description"[^>]*>(.*?)</div>"#, block) ?? ""
+            let summary = Self.decodeEntities(rawDesc.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression))
+                .components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+
+            out.append(FeedArticle(
+                id: link, title: title, summary: summary, url: articleURL,
+                source: "Nature", label: "Research Briefing",
+                publishedDate: parseFeedDate(dateStr), doi: nil
+            ))
+        }
+        return out
+    }
+
+    private static func firstGroup(_ pattern: String, _ s: String) -> String? {
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return nil }
+        let range = NSRange(s.startIndex..., in: s)
+        guard let m = re.firstMatch(in: s, range: range), m.numberOfRanges > 1,
+              let r = Range(m.range(at: 1), in: s) else { return nil }
+        return String(s[r])
+    }
+
+    private static func decodeEntities(_ s: String) -> String {
+        var t = s
+        for (a, b) in [("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
+                       ("&#39;", "'"), ("&apos;", "'"), ("&nbsp;", " ")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        return t.replacingOccurrences(of: "&#\\d+;", with: "", options: .regularExpression)
     }
 
     // MARK: - PubMed search
@@ -384,19 +440,41 @@ private class RSSParser: NSObject, XMLParserDelegate {
             .joined(separator: " ")
     }
 
-    private func parseDate(_ raw: String) -> Date? {
-        let formats = [
-            "EEE, dd MMM yyyy HH:mm:ss Z",    // RSS 2.0
-            "yyyy-MM-dd'T'HH:mm:ssZ",          // ISO 8601
-            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-            "yyyy-MM-dd",                       // dc:date short form
-        ]
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        for fmt in formats {
-            f.dateFormat = fmt
-            if let d = f.date(from: raw) { return d }
-        }
-        return nil
+    private func parseDate(_ raw: String) -> Date? { parseFeedDate(raw) }
+}
+
+// Shared date parser for RSS/Atom and scraped pages.
+private let iso8601Parser: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime]
+    return f
+}()
+private let iso8601FractionalParser: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+
+func parseFeedDate(_ raw: String) -> Date? {
+    let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !s.isEmpty else { return nil }
+    // ISO 8601 with a literal "Z" (e.g. 2026-05-28T06:00:06Z) — handled natively
+    // here because DateFormatter's "Z" pattern expects "+0000", not a literal Z.
+    if s.contains("T") {
+        if let d = iso8601Parser.date(from: s) { return d }
+        if let d = iso8601FractionalParser.date(from: s) { return d }
     }
+    let formats = [
+        "EEE, dd MMM yyyy HH:mm:ss Z",    // RSS 2.0
+        "yyyy-MM-dd'T'HH:mm:ssZ",          // ISO 8601 with numeric offset
+        "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+        "yyyy-MM-dd",                       // dc:date / <time datetime> short form
+    ]
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    for fmt in formats {
+        f.dateFormat = fmt
+        if let d = f.date(from: s) { return d }
+    }
+    return nil
 }

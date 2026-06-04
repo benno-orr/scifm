@@ -50,10 +50,11 @@ The project is configured via `project.yml` (XcodeGen). If `.xcodeproj` is regen
 | `AppSettings.swift` | `UserDefaults`-backed enum for TTS provider (Deepgram/OpenAI) and LLM provider (none/haiku/sonnet/opus/gpt4o-mini) |
 | `FigureModels.swift` | Value types for figure panels and timestamps (`FigurePanel`, `PanelTimestamp`, `ProcessedFigures`) |
 | `FigurePlayerView.swift` | Figure-centric playback UI; shows synchronized panel images and legends |
-| `DiscoverFeed.swift` | `FeedManager` actor; fetches RSS from Nature/Science/Cell; Europe PMC search; thumbnail/abstract fetching |
-| `DiscoverView.swift` | Discover tab UI; article feed, abstract audio buttons, full-article navigation |
+| `DiscoverFeed.swift` | `FeedManager` actor; Digest (`fetchAll`: scraped Nature Research Briefings + Science/Cell RSS), Reviews (`fetchReviews`: Nature Reviews/Genetics/Biotech + Cell + Science), Europe PMC search, thumbnail/abstract; shared `parseFeedDate` (handles ISO-8601 with literal `Z`) |
+| `DiscoverView.swift` | Digest tab UI; article feed, abstract audio buttons, full-article navigation |
+| `ReviewsView.swift` | Reviews tab UI; review-journal feed (mirrors `DiscoverView`, calls `fetchReviews`) |
 | `PapersView.swift` | Papers tab UI; Europe PMC search by keyword/author/DOI; pastes URLs directly into player |
-| `LibraryView.swift` | Library tab UI; lists saved articles with resume-from-position |
+| `LibraryView.swift` | Library tab UI; "Reading"/"Read" segmented filter on `LibraryItem.isFinished`, resume-from-position, per-item progress bar |
 | `WebReaderView.swift` | In-app web browser for viewing paper source pages |
 | `Keychain.swift` | Security framework wrapper for API keys; `APIKeySetupView` |
 | `ShareExtension/ShareViewController.swift` | App extension; writes URL to shared App Group UserDefaults |

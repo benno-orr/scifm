@@ -4,14 +4,30 @@ struct LibraryView: View {
     @EnvironmentObject var viewModel: PlayerViewModel
     @Binding var selectedTab: Int
     @State private var items: [LibraryItem] = []
+    @State private var filter: Filter = .reading
+
+    enum Filter: String, CaseIterable { case reading = "Reading", read = "Read" }
+
+    private var reading: [LibraryItem] { items.filter { !$0.isFinished } }
+    private var read: [LibraryItem]    { items.filter { $0.isFinished } }
+    private var shown: [LibraryItem]   { filter == .reading ? reading : read }
 
     var body: some View {
         NavigationView {
-            Group {
-                if items.isEmpty {
-                    emptyState
-                } else {
-                    list
+            VStack(spacing: 0) {
+                Picker("", selection: $filter) {
+                    ForEach(Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
+                Group {
+                    if shown.isEmpty {
+                        emptyState
+                    } else {
+                        list
+                    }
                 }
             }
             .navigationTitle("Library")
@@ -24,22 +40,25 @@ struct LibraryView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "books.vertical")
+            Image(systemName: filter == .reading ? "headphones" : "checkmark.circle")
                 .font(.system(size: 52))
                 .foregroundColor(.secondary)
-            Text("No articles yet")
+            Text(filter == .reading ? "Nothing in progress" : "Nothing finished yet")
                 .font(.headline)
-            Text("Paste a paper URL to get started.")
+            Text(filter == .reading
+                 ? "Articles you start appear here until you finish them."
+                 : "Articles you listen to the end move here.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var list: some View {
         List {
-            ForEach(items) { item in
+            ForEach(shown) { item in
                 Button {
                     Task {
                         await viewModel.loadLibraryItem(item)
@@ -51,8 +70,9 @@ struct LibraryView: View {
                 .buttonStyle(.plain)
             }
             .onDelete { indexSet in
+                let toDelete = indexSet.map { shown[$0].id }
                 Task {
-                    for idx in indexSet { await LibraryManager.shared.delete(items[idx].id) }
+                    for id in toDelete { await LibraryManager.shared.delete(id) }
                     items = await LibraryManager.shared.loadAll()
                 }
             }
@@ -75,6 +95,16 @@ struct LibraryView: View {
             }
             .font(.caption)
             .foregroundColor(.secondary)
+
+            if item.isFinished {
+                Label("Finished", systemImage: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundColor(.accentColor)
+            } else if item.progressFraction > 0 {
+                ProgressView(value: item.progressFraction)
+                    .tint(.accentColor)
+                    .padding(.top, 2)
+            }
         }
         .padding(.vertical, 4)
     }

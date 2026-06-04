@@ -31,6 +31,9 @@ final class AudioPlayer: ObservableObject {
     @Published var currentTime: TimeInterval = 0
     @Published var duration: TimeInterval = 0
 
+    /// Fires once when playback reaches the end naturally (not on pause/stop).
+    var onPlaybackFinished: (() -> Void)?
+
     private var avPlayer: AVAudioPlayer?
     private var ticker: AnyCancellable?
 
@@ -177,6 +180,7 @@ final class AudioPlayer: ObservableObject {
                         self.streamingStarted = false
                         self.stopTicker()
                         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+                        self.onPlaybackFinished?()
                     }
                 } else if let p = self.avPlayer {
                     self.currentTime = p.currentTime
@@ -184,6 +188,7 @@ final class AudioPlayer: ObservableObject {
                         self.isPlaying = false
                         self.stopTicker()
                         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+                        self.onPlaybackFinished?()
                     }
                     self.syncNowPlaying()
                 }
