@@ -240,29 +240,33 @@ final class PlayerViewModel: ObservableObject {
         currentLibraryItemID = nil; exportMarkdown = ""; featuredImageURL = nil
         articleTitle = title; errorMessage = nil
         Task {
-            status = .generating(0, 1)
             do {
                 let chunks = TextChunker.chunk(ScientificPronunciation.rewrite(text))
                 var allPCM = Data()
                 var cumulativeTime: TimeInterval = 0
                 var built: [SentenceTimestamp] = []
                 status = .generating(0, chunks.count)
+                player.startStreaming()
                 for (i, chunk) in chunks.enumerated() {
-                    guard case .generating = status else { return }
+                    guard case .generating = status else { player.stop(); return }
                     status = .generating(i + 1, chunks.count)
                     built.append(SentenceTimestamp(text: chunk, startTime: cumulativeTime))
                     var chunkPCM = Data()
                     let stream = try await streamTTS(chunk)
-                    for try await data in stream { chunkPCM.append(data) }
+                    for try await data in stream {
+                        chunkPCM.append(data)
+                        player.appendPCM(data)
+                    }
                     cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
                     allPCM.append(chunkPCM)
+                    if i == 0 {
+                        player.setNowPlaying(title: title)
+                        status = .ready
+                    }
                 }
                 sentences = built
-                let wav = WAVBuilder.make(pcmData: allPCM)
-                try player.load(wavData: wav)
+                player.finalizeStreaming()
                 player.setNowPlaying(title: title)
-                status = .ready
-                player.play()
             } catch let err as TTSError {
                 if case .missingAPIKey = err { showAPIKeySetup = true }
                 errorMessage = err.localizedDescription; status = .idle
@@ -352,12 +356,12 @@ final class PlayerViewModel: ObservableObject {
             built.append(SentenceTimestamp(text: chunk, startTime: cumulativeTime))
             var chunkPCM = Data()
             let stream = try await streamTTS(chunk)
-            for try await data in stream { chunkPCM.append(data) }
+            for try await data in stream {
+                chunkPCM.append(data)
+                player.appendPCM(data)
+            }
             cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
             allPCM.append(chunkPCM)
-
-            // Append to streaming player — starts playing immediately after first chunk
-            player.appendPCM(chunkPCM)
             sentences = built  // Update transcript incrementally
 
             // Switch to ready layout after first chunk so user gets immediate UI access
