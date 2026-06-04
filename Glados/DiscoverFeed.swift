@@ -40,6 +40,7 @@ actor FeedManager {
     static let shared = FeedManager()
 
     private var thumbnailCache: [String: URL] = [:]
+    private let briefingProcessor = ArticleProcessor()
 
     private let reviewSources: [FeedSource] = [
         FeedSource(
@@ -169,6 +170,14 @@ actor FeedManager {
             ))
         }
         return out
+    }
+
+    /// Cleans a scraped briefing summary for narration the same way full articles
+    /// are prepared: strip citations/figure refs, then the LLM tidy pass.
+    /// `LLMCleaner.clean` is a no-op (returns input) when no LLM provider is set.
+    func tidyForReading(_ text: String, title: String) async -> String {
+        let stripped = await briefingProcessor.cleanText(text)
+        return await LLMCleaner.shared.clean(title: title, text: stripped)
     }
 
     private static func firstGroup(_ pattern: String, _ s: String) -> String? {
