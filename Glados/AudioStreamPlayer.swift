@@ -43,6 +43,10 @@ final class AudioPlayer: ObservableObject {
     private var streamingDuration: TimeInterval = 0
     private var streamingStarted = false
     private var streamingFinalized = false
+    private var pendingBuffers = 0      // scheduled but not yet played out
+    private var userPaused = false      // explicit pause — don't auto-start on new buffers
+    /// Audio buffered before playback begins, to ride out TTS/network gaps.
+    private static let prebufferSeconds: TimeInterval = 1.5
     private static let streamFmt = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: 24000, channels: 1, interleaved: false)!
 
@@ -59,13 +63,24 @@ final class AudioPlayer: ObservableObject {
     }
 
     func play() {
-        avPlayer?.play()
+        userPaused = false
+        if engine != nil {
+            if streamingStarted {
+                playerNode?.play()
+            } else {
+                startStreamingPlayback()   // user opted in before the prebuffer filled
+            }
+        } else {
+            avPlayer?.play()
+        }
         isPlaying = true
         startTicker()
         syncNowPlaying()
     }
 
     func pause() {
+        userPaused = true
+        playerNode?.pause()
         avPlayer?.pause()
         isPlaying = false
         stopTicker()
@@ -94,6 +109,7 @@ final class AudioPlayer: ObservableObject {
         engine?.stop()
         engine = nil; playerNode = nil
         streamingDuration = 0; streamingStarted = false; streamingFinalized = false
+        pendingBuffers = 0; userPaused = false
 
         avPlayer?.stop()
         avPlayer = nil
@@ -110,6 +126,7 @@ final class AudioPlayer: ObservableObject {
     func startStreaming() {
         stop()
         streamingDuration = 0; streamingStarted = false; streamingFinalized = false
+        pendingBuffers = 0; userPaused = false
         let e = AVAudioEngine()
         let pn = AVAudioPlayerNode()
         e.attach(pn)
@@ -118,7 +135,8 @@ final class AudioPlayer: ObservableObject {
         engine = e; playerNode = pn
     }
 
-    /// Append a raw int16 24 kHz PCM chunk. Playback begins automatically after the first call.
+    /// Append a raw int16 24 kHz PCM chunk. Playback begins automatically once
+    /// `prebufferSeconds` of audio is queued (or on finalize, for shorter clips).
     func appendPCM(_ data: Data) {
         guard let pn = playerNode, let _ = engine, !data.isEmpty else { return }
         let frameCount = data.count / 2
@@ -132,17 +150,47 @@ final class AudioPlayer: ObservableObject {
         }
         streamingDuration += Double(frameCount) / 24000.0
         duration = streamingDuration
-        pn.scheduleBuffer(buf, completionHandler: nil)
-        if !streamingStarted {
-            pn.play()
-            isPlaying = true
-            streamingStarted = true
-            startTicker()
+        pendingBuffers += 1
+        pn.scheduleBuffer(buf, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.pendingBuffers -= 1
+                self.checkStreamingComplete()
+            }
+        }
+        if !streamingStarted && !userPaused && streamingDuration >= Self.prebufferSeconds {
+            startStreamingPlayback()
         }
     }
 
     /// Call after all chunks have been appended.
-    func finalizeStreaming() { streamingFinalized = true }
+    func finalizeStreaming() {
+        streamingFinalized = true
+        // Clips shorter than the prebuffer threshold never auto-started.
+        if !streamingStarted && !userPaused { startStreamingPlayback() }
+        checkStreamingComplete()
+    }
+
+    private func startStreamingPlayback() {
+        guard let pn = playerNode, !streamingStarted else { return }
+        pn.play()
+        streamingStarted = true
+        isPlaying = true
+        startTicker()
+    }
+
+    /// Streamed playback is finished when generation is done and every scheduled
+    /// buffer has played out. (AVAudioPlayerNode.isPlaying stays true after the
+    /// queue drains, so buffer accounting is the only reliable signal.)
+    private func checkStreamingComplete() {
+        guard streamingFinalized, streamingStarted, pendingBuffers == 0 else { return }
+        isPlaying = false
+        streamingStarted = false
+        streamingFinalized = false
+        stopTicker()
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        onPlaybackFinished?()
+    }
 
     func setNowPlaying(title: String) {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
@@ -168,20 +216,15 @@ final class AudioPlayer: ObservableObject {
             .sink { [weak self] _ in
                 guard let self else { return }
                 if let pn = self.playerNode, self.streamingStarted {
-                    // Streaming mode: read time from node
+                    // Streaming mode: read time from node.
+                    // Completion is detected via buffer playback callbacks
+                    // (checkStreamingComplete), not here — the node's isPlaying
+                    // stays true even after its queue drains.
                     if let lastRender = pn.lastRenderTime,
                        let pt = pn.playerTime(forNodeTime: lastRender) {
                         self.currentTime = min(Double(pt.sampleTime) / pt.sampleRate, self.duration)
                     }
                     self.syncNowPlaying()
-                    // Detect playback finished after all buffers drained
-                    if self.streamingFinalized && !pn.isPlaying {
-                        self.isPlaying = false
-                        self.streamingStarted = false
-                        self.stopTicker()
-                        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-                        self.onPlaybackFinished?()
-                    }
                 } else if let p = self.avPlayer {
                     self.currentTime = p.currentTime
                     if !p.isPlaying && self.isPlaying {

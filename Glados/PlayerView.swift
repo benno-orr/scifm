@@ -39,6 +39,10 @@ final class PlayerViewModel: ObservableObject {
     private var currentSourceURL: String = ""
     private var currentLibraryItemID: UUID? = nil
     private(set) var pendingURL: URL? = nil
+    /// Identifies the active TTS generation. Refreshed whenever playback is
+    /// stopped or replaced, so in-flight generation loops abort instead of
+    /// appending into (or stopping) a newer session's engine.
+    private var generationToken = UUID()
 
     init() {
         player.objectWillChange
@@ -89,6 +93,7 @@ final class PlayerViewModel: ObservableObject {
             let t = player.currentTime
             Task { await LibraryManager.shared.updateLastPlayedTime(id, time: t) }
         }
+        generationToken = UUID()   // abort any in-flight generation
         player.stop()
         status = .idle
     }
@@ -98,6 +103,7 @@ final class PlayerViewModel: ObservableObject {
             let t = player.currentTime
             await LibraryManager.shared.updateLastPlayedTime(id, time: t)
         }
+        generationToken = UUID()   // abort any in-flight generation
         player.stop()
         sentences = []
         currentSentenceIndex = 0
@@ -139,6 +145,7 @@ final class PlayerViewModel: ObservableObject {
             let t = player.currentTime
             await LibraryManager.shared.updateLastPlayedTime(id, time: t)
         }
+        generationToken = UUID()   // abort any in-flight generation
         player.stop()
         panels = []
         panelTimestamps = []
@@ -242,6 +249,7 @@ final class PlayerViewModel: ObservableObject {
             let t = player.currentTime
             Task { await LibraryManager.shared.updateLastPlayedTime(id, time: t) }
         }
+        generationToken = UUID()   // abort any in-flight generation
         player.stop()
         sentences = []; currentSentenceIndex = 0
         currentLibraryItemID = nil; exportMarkdown = ""; featuredImageURL = nil
@@ -253,14 +261,17 @@ final class PlayerViewModel: ObservableObject {
                 var cumulativeTime: TimeInterval = 0
                 var built: [SentenceTimestamp] = []
                 status = .generating(0, chunks.count)
+                let gen = UUID()
+                generationToken = gen
                 player.startStreaming()
                 for (i, chunk) in chunks.enumerated() {
-                    guard case .generating = status else { player.stop(); return }
-                    status = .generating(i + 1, chunks.count)
+                    guard generationToken == gen else { return }
+                    if case .generating = status { status = .generating(i + 1, chunks.count) }
                     built.append(SentenceTimestamp(text: chunk, startTime: cumulativeTime))
                     var chunkPCM = Data()
                     let stream = try await streamTTS(chunk)
                     for try await data in stream {
+                        guard generationToken == gen else { return }
                         chunkPCM.append(data)
                         player.appendPCM(data)
                     }
@@ -271,6 +282,7 @@ final class PlayerViewModel: ObservableObject {
                         status = .ready
                     }
                 }
+                guard generationToken == gen else { return }
                 sentences = built
                 player.finalizeStreaming()
                 player.setNowPlaying(title: title)
@@ -319,6 +331,7 @@ final class PlayerViewModel: ObservableObject {
             let t = player.currentTime
             await LibraryManager.shared.updateLastPlayedTime(id, time: t)
         }
+        generationToken = UUID()   // abort any in-flight generation
         player.stop()
         sentences = []
         currentSentenceIndex = 0
@@ -355,15 +368,19 @@ final class PlayerViewModel: ObservableObject {
         var built: [SentenceTimestamp] = []
 
         status = .generating(0, chunks.count)
+        let gen = UUID()
+        generationToken = gen
         player.startStreaming()
 
         for (i, chunk) in chunks.enumerated() {
-            guard case .generating = status else { player.stop(); return }
-            status = .generating(i + 1, chunks.count)
+            // Aborted (stop pressed / replaced by a newer load)?
+            guard generationToken == gen else { return }
+            if case .generating = status { status = .generating(i + 1, chunks.count) }
             built.append(SentenceTimestamp(text: chunk, startTime: cumulativeTime))
             var chunkPCM = Data()
             let stream = try await streamTTS(chunk)
             for try await data in stream {
+                guard generationToken == gen else { return }
                 chunkPCM.append(data)
                 player.appendPCM(data)
             }
@@ -378,6 +395,7 @@ final class PlayerViewModel: ObservableObject {
             }
         }
 
+        guard generationToken == gen else { return }
         player.finalizeStreaming()
         player.setNowPlaying(title: article.title)  // Update duration in Now Playing
 
