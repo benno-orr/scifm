@@ -19,4 +19,7 @@ struct PanelTimestamp {
 struct ProcessedFigures {
     let title: String
     let panels: [FigurePanel]
+    /// Abstract + the body setup leading up to the first figure, narrated before
+    /// the figure walkthrough begins. Empty if none could be extracted.
+    var preamble: String = ""
 }

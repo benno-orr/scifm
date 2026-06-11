@@ -307,7 +307,10 @@ actor ArticleProcessor {
         }
 
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
-        return ProcessedFigures(title: raw.title, panels: allPanels)
+        let firstFig = allPanels.first?.figureNumber ?? 1
+        let intro = introBeforeFirstFigure(in: raw.bodyText, figureNumber: firstFig)
+        let preamble = await buildPreamble(abstract: raw.abstract, intro: intro)
+        return ProcessedFigures(title: raw.title, panels: allPanels, preamble: preamble)
     }
 
     private func figureImageURL(href: String, pmcid: String) -> URL? {
@@ -330,7 +333,8 @@ actor ArticleProcessor {
         else { throw ArticleError.fetchFailure }
 
         let title = articleTitleFromHTML(html) ?? "Figures"
-        let contextGroups = extractFigureContextGroups(from: extractArticleTextFromHTML(html))
+        let bodyText = extractArticleTextFromHTML(html)
+        let contextGroups = extractFigureContextGroups(from: bodyText)
 
         let figurePattern = #"<figure[^>]*>([\s\S]*?)</figure>"#
         guard let regex = try? NSRegularExpression(pattern: figurePattern, options: .caseInsensitive) else {
@@ -369,7 +373,100 @@ actor ArticleProcessor {
         }
 
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
-        return ProcessedFigures(title: title, panels: allPanels)
+        // Abstract + intro = the substantial prose paragraphs before the first
+        // <figure>, with nav/boilerplate removed.
+        let abstract = abstractFromHTML(html)
+        var setup = preambleParagraphsFromHTML(html)
+        if !abstract.isEmpty, !setup.contains(String(abstract.prefix(60))) {
+            setup = setup.isEmpty ? abstract : abstract + " " + setup
+        }
+        let preamble = await buildPreamble(abstract: "", intro: setup)
+        return ProcessedFigures(title: title, panels: allPanels, preamble: preamble)
+    }
+
+    /// Abstract + introduction for the HTML path: substantial <p> paragraphs that
+    /// appear before the first <figure>, minus site navigation/boilerplate.
+    private func preambleParagraphsFromHTML(_ html: String) -> String {
+        guard let figRange = html.range(of: "<figure", options: .caseInsensitive) else {
+            return abstractFromHTML(html)
+        }
+        let head = String(html[..<figRange.lowerBound])
+        let boilerplate = ["thank you for visiting", "browser version", "view all journals",
+                           "log in", "sign up for alerts", "explore content", "publish with us",
+                           "rss feed", "similar content", "download pdf", "cookie", "google scholar",
+                           "advertisement", "about the journal", "skip to main", "accept all",
+                           "manage preferences", "we use cookies"]
+        guard let pRe = try? NSRegularExpression(pattern: #"<p[^>]*>([\s\S]*?)</p>"#,
+                                                 options: .caseInsensitive) else {
+            return abstractFromHTML(html)
+        }
+        var paras: [String] = []
+        for m in pRe.matches(in: head, range: NSRange(head.startIndex..., in: head)) {
+            guard let r = Range(m.range(at: 1), in: head) else { continue }
+            let p = htmlToPlainText(String(head[r]))
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard p.count > 150 else { continue }
+            let low = p.lowercased()
+            if boilerplate.contains(where: { low.contains($0) }) { continue }
+            paras.append(p)
+            if paras.joined(separator: " ").count > 4000 { break }   // cap the setup length
+        }
+        return paras.joined(separator: " ")
+    }
+
+    /// Abstract + intro, cleaned for narration (citations/figure refs stripped).
+    private func buildPreamble(abstract: String, intro: String) async -> String {
+        let combined = [abstract, intro]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !combined.isEmpty else { return "" }
+        return await cleanText(combined)
+    }
+
+    /// Body sentences from the start up to (not including) the first reference to
+    /// the given figure number — the narrative setup before the figures begin.
+    private func introBeforeFirstFigure(in bodyText: String, figureNumber: Int) -> String {
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = bodyText
+        var sentences: [String] = []
+        tokenizer.enumerateTokens(in: bodyText.startIndex..<bodyText.endIndex) { range, _ in
+            sentences.append(String(bodyText[range])); return true
+        }
+        // "Fig. N" / "Figure N" / "Fig Na", but not "Fig 1" matching "Fig 10".
+        let pattern = #"Fig(?:ure|s)?\.?\s*"# + "\(figureNumber)(?![0-9])"
+        let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive)
+        var intro: [String] = []
+        for s in sentences {
+            if let regex, regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil { break }
+            intro.append(s)
+        }
+        // Guard against runaway intros when no figure callout is found in the body.
+        let joined = intro.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(joined.prefix(3000))
+    }
+
+    /// Pulls the abstract out of article HTML (Nature/Cell markup, then meta).
+    private func abstractFromHTML(_ html: String) -> String {
+        let patterns = [
+            #"<section[^>]+data-title="Abstract"[^>]*>([\s\S]*?)</section>"#,
+            #"<div[^>]+id="[Aa]bs1-content"[^>]*>([\s\S]*?)</div>"#,
+            #"<div[^>]+class="[^"]*abstract[^"]*"[^>]*>([\s\S]*?)</div>"#,
+            #"<meta[^>]+name="description"[^>]+content="([^"]+)""#,
+            #"<meta[^>]+property="og:description"[^>]+content="([^"]+)""#,
+        ]
+        for p in patterns {
+            if let regex = try? NSRegularExpression(pattern: p, options: .caseInsensitive),
+               let m = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+               let r = Range(m.range(at: 1), in: html) {
+                let t = htmlToPlainText(String(html[r]))
+                    .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.count > 80 { return t }   // a real abstract, not a nav blurb
+            }
+        }
+        return ""
     }
 
     private func articleTitleFromHTML(_ html: String) -> String? {
@@ -462,6 +559,9 @@ actor ArticleProcessor {
         }
         for raw in candidates {
             var s = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "&amp;", with: "&")
+            // Springer serves WebP via "?as=webp", which AsyncImage decodes
+            // unreliably; drop it so the original PNG/JPG is returned instead.
+            if let r = s.range(of: "?as=webp") { s = String(s[..<r.lowerBound]) }
             let lower = s.lowercased()
             if lower.hasPrefix("data:") || lower.contains(".svg") { continue }
             if s.hasPrefix("//") { s = "https:" + s }

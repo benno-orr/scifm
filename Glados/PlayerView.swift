@@ -227,7 +227,7 @@ final class PlayerViewModel: ObservableObject {
             let result = try await processor.processFigures(url: url)
             articleTitle = result.title
             panels = result.panels
-            try await generateFigureAudio(result.panels)
+            try await generateFigureAudio(result.panels, preamble: result.preamble)
         } catch let err as DeepgramError {
             if case .missingAPIKey = err { showAPIKeySetup = true }
             errorMessage = err.localizedDescription
@@ -238,19 +238,54 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    private func generateFigureAudio(_ panels: [FigurePanel]) async throws {
+    private func generateFigureAudio(_ panels: [FigurePanel], preamble: String) async throws {
         var allPCM = Data()
         var cumulativeTime: TimeInterval = 0
         var timestamps: [PanelTimestamp] = []
+        var started = false
 
-        status = .generating(0, panels.count)
+        let steps = panels.count + (preamble.isEmpty ? 0 : 1)
+        var step = 0
         let gen = UUID()
         generationToken = gen
-        player.startStreaming()   // stream into the engine as panels generate
+        status = .generating(0, steps)
+        player.startStreaming()   // stream into the engine as audio generates
 
+        // Reveal the figure player and begin playback as soon as the first audio
+        // is buffered, so listening starts before everything is generated.
+        func beginPlaybackIfNeeded() {
+            guard !started else { return }
+            started = true
+            player.setNowPlaying(title: articleTitle)
+            status = .ready
+            player.play()
+        }
+
+        // 1. Narrate the abstract + setup leading into the first figure. No panel
+        //    timestamp is recorded, so figure 1 (currentPanelIndex 0) stays on
+        //    screen — it's the figure being introduced.
+        if !preamble.isEmpty {
+            step += 1; status = .generating(step, steps)
+            for chunk in TextChunker.chunk(ScientificPronunciation.rewrite(preamble)) {
+                guard generationToken == gen else { return }
+                var chunkPCM = Data()
+                let stream = try await streamTTS(chunk)
+                for try await data in stream {
+                    guard generationToken == gen else { return }
+                    chunkPCM.append(data)
+                    player.appendPCM(data)
+                }
+                CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
+                cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
+                allPCM.append(chunkPCM)
+                beginPlaybackIfNeeded()
+            }
+        }
+
+        // 2. Figure-by-figure narration.
         for (i, panel) in panels.enumerated() {
             guard generationToken == gen else { return }
-            status = .generating(i + 1, panels.count)
+            step += 1; status = .generating(step, steps)
 
             // This panel's audio begins at the current cumulative time. Publish
             // the timestamps incrementally so the figure view can sync to playback
@@ -286,14 +321,7 @@ final class PlayerViewModel: ObservableObject {
             }
             cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
             allPCM.append(chunkPCM)
-
-            // Once the first figure has audio, reveal the figure player and start
-            // playback while the rest keep generating.
-            if i == 0 {
-                player.setNowPlaying(title: articleTitle)
-                status = .ready
-                player.play()
-            }
+            beginPlaybackIfNeeded()
         }
 
         guard generationToken == gen else { return }
