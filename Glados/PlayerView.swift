@@ -841,16 +841,22 @@ struct PlayerView: View {
         }
     }
 
-    // Compact API-spend readout for the header ribbon (today over all-time).
+    // API-spend readout for the header ribbon: today (accent) and all-time
+    // (muted) values, each in a small circle.
     private var costRibbon: some View {
-        VStack(alignment: .leading, spacing: -1) {
-            Text("\(currency(costTracker.todayTotal)) today")
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.primary)
-            Text("\(currency(costTracker.allTimeTotal)) all-time")
-                .font(.system(size: 9).monospacedDigit())
-                .foregroundColor(.secondary)
+        HStack(spacing: 6) {
+            costCircle(costTracker.todayTotal, tint: .accentColor)
+            costCircle(costTracker.allTimeTotal, tint: .secondary)
         }
+    }
+
+    private func costCircle(_ value: Double, tint: Color) -> some View {
+        Text(currency(value))
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundColor(.primary)
+            .frame(width: 42, height: 42)
+            .background(Circle().fill(tint.opacity(0.15)))
+            .overlay(Circle().stroke(tint.opacity(0.5), lineWidth: 1))
     }
 
     @State private var pastedURL = ""
