@@ -21,7 +21,7 @@ struct ReviewsView: View {
                         ArticleRow(
                             article: article,
                             onTap: { selectedArticle = article },
-                            onReadFull: { viewModel.load(url: article.url); selectedTab = 0 },
+                            onReadFull: { viewModel.load(url: article.url, kind: .review); selectedTab = 0 },
                             abstractText: { await resolveAbstract(article) }
                         )
                     }
@@ -52,7 +52,7 @@ struct ReviewsView: View {
                     },
                     onReadFull: {
                         selectedArticle = nil
-                        viewModel.load(url: article.url)
+                        viewModel.load(url: article.url, kind: .review)
                         selectedTab = 0
                     }
                 )

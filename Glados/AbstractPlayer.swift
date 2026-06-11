@@ -53,6 +53,7 @@ final class AbstractPlayer: ObservableObject {
                         guard !Task.isCancelled else { return }
                         allPCM.append(data)
                     }
+                    CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
                 }
                 guard !Task.isCancelled else { return }
                 let wav = WAVBuilder.make(pcmData: allPCM)

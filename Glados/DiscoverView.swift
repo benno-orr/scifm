@@ -21,7 +21,7 @@ struct DiscoverView: View {
                         ArticleRow(
                             article: article,
                             onTap: { selectedArticle = article },
-                            onReadFull: { viewModel.load(url: article.url); selectedTab = 0 },
+                            onReadFull: { viewModel.load(url: article.url, kind: .editorial); selectedTab = 0 },
                             abstractText: { await resolveAbstract(article) }
                         )
                     }
@@ -56,7 +56,7 @@ struct DiscoverView: View {
                     },
                     onReadFull: {
                         selectedArticle = nil
-                        viewModel.load(url: article.url)
+                        viewModel.load(url: article.url, kind: .editorial)
                         selectedTab = 0
                     }
                 )

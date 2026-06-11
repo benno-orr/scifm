@@ -68,6 +68,19 @@ struct LibraryView: View {
                     row(item)
                 }
                 .buttonStyle(.plain)
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    if item.isFinished {
+                        Button {
+                            setFinished(item.id, false)
+                        } label: { Label("Mark unread", systemImage: "arrow.uturn.backward") }
+                        .tint(.orange)
+                    } else {
+                        Button {
+                            setFinished(item.id, true)
+                        } label: { Label("Mark read", systemImage: "checkmark") }
+                        .tint(.accentColor)
+                    }
+                }
             }
             .onDelete { indexSet in
                 let toDelete = indexSet.map { shown[$0].id }
@@ -80,8 +93,17 @@ struct LibraryView: View {
         .listStyle(.plain)
     }
 
+    private func setFinished(_ id: UUID, _ finished: Bool) {
+        Task {
+            await LibraryManager.shared.setFinished(id, finished)
+            items = await LibraryManager.shared.loadAll()
+        }
+    }
+
     private func row(_ item: LibraryItem) -> some View {
         VStack(alignment: .leading, spacing: 4) {
+            kindBadge(item.contentKind)
+
             Text(item.title)
                 .font(.subheadline)
                 .lineLimit(2)
@@ -97,16 +119,34 @@ struct LibraryView: View {
             .foregroundColor(.secondary)
 
             if item.isFinished {
-                Label("Finished", systemImage: "checkmark.circle.fill")
-                    .font(.caption2)
-                    .foregroundColor(.accentColor)
-            } else if item.progressFraction > 0 {
-                ProgressView(value: item.progressFraction)
-                    .tint(.accentColor)
-                    .padding(.top, 2)
+                Button { setFinished(item.id, false) } label: {
+                    Label("Finished", systemImage: "checkmark.circle.fill")
+                        .font(.caption2).foregroundColor(.accentColor)
+                }
+                .buttonStyle(.plain)
+            } else {
+                if item.progressFraction > 0 {
+                    ProgressView(value: item.progressFraction)
+                        .tint(.accentColor)
+                        .padding(.top, 2)
+                }
+                Button { setFinished(item.id, true) } label: {
+                    Label("Mark as read", systemImage: "checkmark.circle")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func kindBadge(_ kind: ContentKind) -> some View {
+        Label(kind.label.uppercased(), systemImage: kind.symbol)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(.accentColor)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.accentColor.opacity(0.12), in: Capsule())
     }
 
     private func formatDuration(_ t: TimeInterval) -> String {

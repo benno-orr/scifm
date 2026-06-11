@@ -37,6 +37,7 @@
 		F0429DD6D3B294AF4571BAEF /* ScientificPronunciation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DC63B50D86D6B3393C8604 /* ScientificPronunciation.swift */; };
 		F35CC97F8FABCD895EEAF374 /* ArticleProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28E8B079180D78FE93821C7C /* ArticleProcessor.swift */; };
 		161F88A84BFB4FE5B3AD4908 /* ReviewsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAACE3E8F41E47FCA9CA90F6 /* ReviewsView.swift */; };
+		984D1C7BEB594830A56804F4 /* Cost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19E28E4573904E938E894952 /* Cost.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -107,6 +108,7 @@
 		F07B5916EF6CE8AEE7FE5B86 /* DiscoverFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverFeed.swift; sourceTree = "<group>"; };
 		F373038D1D87F05F90F46F44 /* DeepgramTTS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepgramTTS.swift; sourceTree = "<group>"; };
 		FAACE3E8F41E47FCA9CA90F6 /* ReviewsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewsView.swift; sourceTree = "<group>"; };
+		19E28E4573904E938E894952 /* Cost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cost.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -172,6 +174,7 @@
 				03D68D7CF1EDE8558329CF7A /* AbstractPlayer.swift */,
 				EF9D0DBEE8FA603EA2BE5073 /* AppSettings.swift */,
 				28E8B079180D78FE93821C7C /* ArticleProcessor.swift */,
+				19E28E4573904E938E894952 /* Cost.swift */,
 				8242C69F60E7A5DE5A80E73D /* Assets.xcassets */,
 				34E71D870EAE6D339F6C19E5 /* AudioStreamPlayer.swift */,
 				F373038D1D87F05F90F46F44 /* DeepgramTTS.swift */,
@@ -338,6 +341,7 @@
 				2A0C29D4FFD1E13E1D1EFF31 /* AbstractPlayer.swift in Sources */,
 				ABC88F8A149DC76FF1D40431 /* AppSettings.swift in Sources */,
 				F35CC97F8FABCD895EEAF374 /* ArticleProcessor.swift in Sources */,
+				984D1C7BEB594830A56804F4 /* Cost.swift in Sources */,
 				566DA51F4988E6A43EF82665 /* AudioStreamPlayer.swift in Sources */,
 				A9B297A80CE9F470AFD0B472 /* DeepgramTTS.swift in Sources */,
 				55E580FFA9DE14557650A6EF /* DiscoverFeed.swift in Sources */,

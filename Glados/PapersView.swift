@@ -23,7 +23,7 @@ struct PapersView: View {
                 } else if !results.isEmpty {
                     List(results) { result in
                         SearchResultRow(result: result) {
-                            viewModel.load(url: result.articleURL)
+                            viewModel.load(url: result.articleURL, kind: .primary)
                             selectedTab = 0
                         }
                     }
@@ -59,7 +59,7 @@ struct PapersView: View {
         // URL pasted → load directly
         if q.hasPrefix("http://") || q.hasPrefix("https://") || q.contains("doi.org") {
             if let url = URL(string: q) {
-                viewModel.load(url: url)
+                viewModel.load(url: url, kind: .primary)
                 selectedTab = 0
                 searchQuery = ""
                 return

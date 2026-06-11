@@ -20,6 +20,7 @@ final class PlayerViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
     @Published var showAPIKeySetup = false
     @Published var showWebReader = false
+    @Published var costPrompt: CostPrompt? = nil
     @Published var mode: AppMode = .narration
     @Published var exportMarkdown: String = ""
     @Published var featuredImageURL: URL? = nil
@@ -38,11 +39,34 @@ final class PlayerViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var currentSourceURL: String = ""
     private var currentLibraryItemID: UUID? = nil
+    private var currentKind: ContentKind = .other
     private(set) var pendingURL: URL? = nil
     /// Identifies the active TTS generation. Refreshed whenever playback is
     /// stopped or replaced, so in-flight generation loops abort instead of
     /// appending into (or stopping) a newer session's engine.
     private var generationToken = UUID()
+    /// Below this estimate, skip the confirm dialog and just play.
+    private static let costPromptThreshold = 0.02
+    private var costPromptContinuation: CheckedContinuation<Bool, Never>?
+
+    /// Asks the user to confirm a TTS spend. Returns true to proceed. Trivially
+    /// cheap reads (< threshold) proceed without prompting.
+    private func confirmCost(chars: Int) async -> Bool {
+        let provider = AppSettings.ttsProvider
+        let estimate = Pricing.ttsCost(chars: chars, provider: provider)
+        guard estimate >= Self.costPromptThreshold else { return true }
+        costPromptContinuation?.resume(returning: false)   // defensively clear any stale prompt
+        return await withCheckedContinuation { cont in
+            costPromptContinuation = cont
+            costPrompt = CostPrompt(chars: chars, estimate: estimate, provider: provider.displayName)
+        }
+    }
+
+    func resolveCostPrompt(_ proceed: Bool) {
+        costPrompt = nil
+        costPromptContinuation?.resume(returning: proceed)
+        costPromptContinuation = nil
+    }
 
     init() {
         player.objectWillChange
@@ -55,9 +79,10 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    func load(url: URL) {
+    func load(url: URL, kind: ContentKind = .other) {
         pendingURL = url
         currentSourceURL = url.absoluteString
+        currentKind = kind
         if mode == .figure {
             Task { await loadFigures(url: url) }
         } else {
@@ -256,7 +281,9 @@ final class PlayerViewModel: ObservableObject {
         articleTitle = title; errorMessage = nil
         Task {
             do {
-                let chunks = TextChunker.chunk(ScientificPronunciation.rewrite(text))
+                let rewritten = ScientificPronunciation.rewrite(text)
+                let chunks = TextChunker.chunk(rewritten)
+                guard await confirmCost(chars: rewritten.count) else { status = .idle; return }
                 var allPCM = Data()
                 var cumulativeTime: TimeInterval = 0
                 var built: [SentenceTimestamp] = []
@@ -275,6 +302,7 @@ final class PlayerViewModel: ObservableObject {
                         chunkPCM.append(data)
                         player.appendPCM(data)
                     }
+                    CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
                     cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
                     allPCM.append(chunkPCM)
                     if i == 0 {
@@ -363,6 +391,10 @@ final class PlayerViewModel: ObservableObject {
         let llmCleaned = await LLMCleaner.shared.clean(title: article.title, text: pronounced)
         exportMarkdown = buildMarkdown(title: article.title, body: llmCleaned)
         let chunks = TextChunker.chunk(llmCleaned)
+
+        // Estimate the TTS spend and let the user cancel before we make the call.
+        guard await confirmCost(chars: llmCleaned.count) else { status = .idle; return }
+
         var allPCM = Data()
         var cumulativeTime: TimeInterval = 0
         var built: [SentenceTimestamp] = []
@@ -384,6 +416,7 @@ final class PlayerViewModel: ObservableObject {
                 chunkPCM.append(data)
                 player.appendPCM(data)
             }
+            CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
             cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
             allPCM.append(chunkPCM)
             sentences = built  // Update transcript incrementally
@@ -404,7 +437,8 @@ final class PlayerViewModel: ObservableObject {
         let stored = built.map { StoredSentence(text: $0.text, startTime: $0.startTime) }
         let savedItem = await LibraryManager.shared.save(
             title: article.title, sourceURL: currentSourceURL,
-            wavData: wav, sentences: stored, duration: player.duration
+            wavData: wav, sentences: stored, duration: player.duration,
+            kind: currentKind
         )
         currentLibraryItemID = savedItem.id
     }
@@ -413,6 +447,13 @@ final class PlayerViewModel: ObservableObject {
 enum PlayerStatus: Equatable {
     case idle, fetching, cleaning, ready
     case generating(Int, Int)
+}
+
+struct CostPrompt: Identifiable {
+    let id = UUID()
+    let chars: Int
+    let estimate: Double
+    let provider: String
 }
 
 // MARK: - Markdown export file
@@ -435,6 +476,7 @@ struct MarkdownExportFile: Transferable {
 struct PlayerView: View {
     @Binding var incomingURL: URL?
     @EnvironmentObject var viewModel: PlayerViewModel
+    @ObservedObject private var costTracker = CostTracker.shared
     @State private var sliderValue: Double = 0
     @State private var isDragging = false
     @State private var isAutoScrolling = true
@@ -452,7 +494,7 @@ struct PlayerView: View {
             }
         }
         .onChange(of: incomingURL) { _, url in
-            if let url { viewModel.load(url: url); incomingURL = nil }
+            if let url { viewModel.load(url: url, kind: .primary); incomingURL = nil }
         }
         .onChange(of: viewModel.status) { _, s in
             if case .ready = s { isAutoScrolling = true }
@@ -478,6 +520,19 @@ struct PlayerView: View {
                 }
             }
         }
+        .alert("Generate narration?", isPresented: Binding(
+            get: { viewModel.costPrompt != nil },
+            set: { if !$0 { viewModel.resolveCostPrompt(false) } }
+        ), presenting: viewModel.costPrompt) { prompt in
+            Button("Cancel", role: .cancel) { viewModel.resolveCostPrompt(false) }
+            Button("Play (~\(currency(prompt.estimate)))") { viewModel.resolveCostPrompt(true) }
+        } message: { prompt in
+            Text("Estimated \(prompt.provider) cost: \(currency(prompt.estimate)) for \(prompt.chars.formatted()) characters.")
+        }
+    }
+
+    private func currency(_ v: Double) -> String {
+        v.formatted(.currency(code: "USD").precision(.fractionLength(v < 1 ? 3 : 2)))
     }
 
     // MARK: - Ready layout
@@ -648,6 +703,8 @@ struct PlayerView: View {
                 Spacer()
 
                 if viewModel.status == .idle {
+                    costBox
+
                     Picker("Mode", selection: $viewModel.mode) {
                         Text("Narration").tag(AppMode.narration)
                         Text("Figures").tag(AppMode.figure)
@@ -668,6 +725,30 @@ struct PlayerView: View {
         }
     }
 
+    private var costBox: some View {
+        HStack(spacing: 0) {
+            costStat("Today", costTracker.todayTotal)
+            Divider().frame(height: 34)
+            costStat("All time", costTracker.allTimeTotal)
+        }
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+
+    private func costStat(_ label: String, _ value: Double) -> some View {
+        VStack(spacing: 3) {
+            Text(label.uppercased())
+                .font(.caption2).foregroundColor(.secondary)
+            Text(currency(value))
+                .font(.title3.monospacedDigit().weight(.semibold))
+            Text("API spend").font(.caption2).foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     @State private var pastedURL = ""
     private var pasteURLField: some View {
         HStack {
@@ -676,7 +757,7 @@ struct PlayerView: View {
                 .padding(8).background(Color(.secondarySystemBackground)).cornerRadius(8)
             Button("Go") {
                 if let url = URL(string: pastedURL.trimmingCharacters(in: .whitespaces)) {
-                    viewModel.load(url: url)
+                    viewModel.load(url: url, kind: .primary)
                     pastedURL = ""
                 }
             }

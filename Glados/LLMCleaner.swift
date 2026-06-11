@@ -114,6 +114,13 @@ actor LLMCleaner {
               let text = content["text"] as? String, !text.isEmpty
         else { return nil }
 
+        if let usage = json["usage"] as? [String: Any] {
+            let inT = usage["input_tokens"] as? Int ?? 0
+            let outT = usage["output_tokens"] as? Int ?? 0
+            CostTracker.shared.recordAsync(
+                Pricing.llmCost(provider: AppSettings.llmProvider, inputTokens: inT, outputTokens: outT))
+        }
+
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -144,6 +151,13 @@ actor LLMCleaner {
               let message = choices.first?["message"] as? [String: Any],
               let text = message["content"] as? String, !text.isEmpty
         else { return nil }
+
+        if let usage = json["usage"] as? [String: Any] {
+            let inT = usage["prompt_tokens"] as? Int ?? 0
+            let outT = usage["completion_tokens"] as? Int ?? 0
+            CostTracker.shared.recordAsync(
+                Pricing.llmCost(provider: AppSettings.llmProvider, inputTokens: inT, outputTokens: outT))
+        }
 
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
