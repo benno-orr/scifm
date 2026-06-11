@@ -30,7 +30,8 @@ struct DiscoverView: View {
                 }
             }
             .charcoalBackdrop()
-            .navigationTitle("Editorials")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if isLoading {

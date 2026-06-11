@@ -30,7 +30,8 @@ struct ReviewsView: View {
                 }
             }
             .charcoalBackdrop()
-            .navigationTitle("Reviews")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if isLoading {
