@@ -309,8 +309,8 @@ actor ArticleProcessor {
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
         let firstFig = allPanels.first?.figureNumber ?? 1
         let intro = introBeforeFirstFigure(in: raw.bodyText, figureNumber: firstFig)
-        let preamble = await buildPreamble(abstract: raw.abstract, intro: intro)
-        return ProcessedFigures(title: raw.title, panels: allPanels, preamble: preamble)
+        let textSections = await textSectionPanels(abstract: raw.abstract, intro: intro)
+        return ProcessedFigures(title: raw.title, panels: textSections + allPanels)
     }
 
     private func figureImageURL(href: String, pmcid: String) -> URL? {
@@ -373,23 +373,16 @@ actor ArticleProcessor {
         }
 
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
-        // Abstract + intro = the substantial prose paragraphs before the first
-        // <figure>, with nav/boilerplate removed.
         let abstract = abstractFromHTML(html)
-        var setup = preambleParagraphsFromHTML(html)
-        if !abstract.isEmpty, !setup.contains(String(abstract.prefix(60))) {
-            setup = setup.isEmpty ? abstract : abstract + " " + setup
-        }
-        let preamble = await buildPreamble(abstract: "", intro: setup)
-        return ProcessedFigures(title: title, panels: allPanels, preamble: preamble)
+        let intro = introParagraphsFromHTML(html, excludingAbstract: abstract)
+        let textSections = await textSectionPanels(abstract: abstract, intro: intro)
+        return ProcessedFigures(title: title, panels: textSections + allPanels)
     }
 
-    /// Abstract + introduction for the HTML path: substantial <p> paragraphs that
-    /// appear before the first <figure>, minus site navigation/boilerplate.
-    private func preambleParagraphsFromHTML(_ html: String) -> String {
-        guard let figRange = html.range(of: "<figure", options: .caseInsensitive) else {
-            return abstractFromHTML(html)
-        }
+    /// Introduction for the HTML path: substantial <p> paragraphs before the first
+    /// <figure>, minus site navigation/boilerplate and the abstract paragraph.
+    private func introParagraphsFromHTML(_ html: String, excludingAbstract abstract: String) -> String {
+        guard let figRange = html.range(of: "<figure", options: .caseInsensitive) else { return "" }
         let head = String(html[..<figRange.lowerBound])
         let boilerplate = ["thank you for visiting", "browser version", "view all journals",
                            "log in", "sign up for alerts", "explore content", "publish with us",
@@ -398,8 +391,9 @@ actor ArticleProcessor {
                            "manage preferences", "we use cookies"]
         guard let pRe = try? NSRegularExpression(pattern: #"<p[^>]*>([\s\S]*?)</p>"#,
                                                  options: .caseInsensitive) else {
-            return abstractFromHTML(html)
+            return ""
         }
+        let absProbe = abstract.count > 60 ? String(abstract.prefix(60)) : abstract
         var paras: [String] = []
         for m in pRe.matches(in: head, range: NSRange(head.startIndex..., in: head)) {
             guard let r = Range(m.range(at: 1), in: head) else { continue }
@@ -409,20 +403,28 @@ actor ArticleProcessor {
             guard p.count > 150 else { continue }
             let low = p.lowercased()
             if boilerplate.contains(where: { low.contains($0) }) { continue }
+            if !absProbe.isEmpty, p.hasPrefix(absProbe) { continue }   // skip the abstract paragraph
             paras.append(p)
             if paras.joined(separator: " ").count > 4000 { break }   // cap the setup length
         }
         return paras.joined(separator: " ")
     }
 
-    /// Abstract + intro, cleaned for narration (citations/figure refs stripped).
-    private func buildPreamble(abstract: String, intro: String) async -> String {
-        let combined = [abstract, intro]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        guard !combined.isEmpty else { return "" }
-        return await cleanText(combined)
+    /// Builds the leading text sections (Abstract, Introduction) as panels with
+    /// `figureNumber == 0` and no image, cleaned for narration.
+    private func textSectionPanels(abstract: String, intro: String) async -> [FigurePanel] {
+        var out: [FigurePanel] = []
+        let a = await cleanText(abstract).trimmingCharacters(in: .whitespacesAndNewlines)
+        if a.count > 40 {
+            out.append(FigurePanel(figureNumber: 0, figureTitle: "Abstract", label: "",
+                                   legendText: a, textReferences: [], imageURL: nil))
+        }
+        let i = await cleanText(intro).trimmingCharacters(in: .whitespacesAndNewlines)
+        if i.count > 80 {
+            out.append(FigurePanel(figureNumber: 0, figureTitle: "Introduction", label: "",
+                                   legendText: i, textReferences: [], imageURL: nil))
+        }
+        return out
     }
 
     /// Body sentences from the start up to (not including) the first reference to
@@ -562,6 +564,12 @@ actor ArticleProcessor {
             // Springer serves WebP via "?as=webp", which AsyncImage decodes
             // unreliably; drop it so the original PNG/JPG is returned instead.
             if let r = s.range(of: "?as=webp") { s = String(s[..<r.lowerBound]) }
+            // Bump springer thumbnails to a larger size so panel letters are
+            // legible and OCR can locate them for per-panel cropping.
+            if s.contains("media.springernature.com") {
+                s = s.replacingOccurrences(of: #"/lw\d+/"#, with: "/lw1500/", options: .regularExpression)
+                     .replacingOccurrences(of: "/full/", with: "/lw1500/")
+            }
             let lower = s.lowercased()
             if lower.hasPrefix("data:") || lower.contains(".svg") { continue }
             if s.hasPrefix("//") { s = "https:" + s }

@@ -227,7 +227,7 @@ final class PlayerViewModel: ObservableObject {
             let result = try await processor.processFigures(url: url)
             articleTitle = result.title
             panels = result.panels
-            try await generateFigureAudio(result.panels, preamble: result.preamble)
+            try await generateFigureAudio(result.panels)
         } catch let err as DeepgramError {
             if case .missingAPIKey = err { showAPIKeySetup = true }
             errorMessage = err.localizedDescription
@@ -238,21 +238,23 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    private func generateFigureAudio(_ panels: [FigurePanel], preamble: String) async throws {
+    private func generateFigureAudio(_ panels: [FigurePanel]) async throws {
         var allPCM = Data()
         var cumulativeTime: TimeInterval = 0
         var timestamps: [PanelTimestamp] = []
         var started = false
-
-        let steps = panels.count + (preamble.isEmpty ? 0 : 1)
-        var step = 0
         let gen = UUID()
         generationToken = gen
-        status = .generating(0, steps)
+        status = .generating(0, panels.count)
         player.startStreaming()   // stream into the engine as audio generates
 
-        // Reveal the figure player and begin playback as soon as the first audio
-        // is buffered, so listening starts before everything is generated.
+        // Register the seminar in the Library immediately and update it after each
+        // section, so a TTS timeout (or leaving mid-generation) keeps everything
+        // produced so far rather than losing the whole thing.
+        let entry = await LibraryManager.shared.startEntry(
+            title: articleTitle, sourceURL: currentSourceURL, kind: .seminar)
+        currentLibraryItemID = entry.id
+
         func beginPlaybackIfNeeded() {
             guard !started else { return }
             started = true
@@ -261,52 +263,43 @@ final class PlayerViewModel: ObservableObject {
             player.play()
         }
 
-        // 1. Narrate the abstract + setup leading into the first figure. No panel
-        //    timestamp is recorded, so figure 1 (currentPanelIndex 0) stays on
-        //    screen — it's the figure being introduced.
-        if !preamble.isEmpty {
-            step += 1; status = .generating(step, steps)
-            for chunk in TextChunker.chunk(ScientificPronunciation.rewrite(preamble)) {
-                guard generationToken == gen else { return }
-                var chunkPCM = Data()
-                let stream = try await streamTTS(chunk)
-                for try await data in stream {
-                    guard generationToken == gen else { return }
-                    chunkPCM.append(data)
-                    player.appendPCM(data)
-                }
-                CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
-                cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
-                allPCM.append(chunkPCM)
-                beginPlaybackIfNeeded()
+        func persistProgress() async {
+            let wav = WAVBuilder.make(pcmData: allPCM)
+            let stored = zip(panels, timestamps).map { panel, ts in
+                StoredPanel(figureNumber: panel.figureNumber, label: panel.label,
+                            figureTitle: panel.figureTitle, legendText: panel.legendText,
+                            imageURL: panel.imageURL?.absoluteString, startTime: ts.startTime)
             }
+            await LibraryManager.shared.finalizeEntry(
+                entry.id, wavData: wav, sentences: [], duration: player.duration, panels: stored)
         }
 
-        // 2. Figure-by-figure narration.
+        // Timeline = leading text sections (Abstract, Introduction) then figures.
         for (i, panel) in panels.enumerated() {
             guard generationToken == gen else { return }
-            step += 1; status = .generating(step, steps)
+            status = .generating(i + 1, panels.count)
 
-            // This panel's audio begins at the current cumulative time. Publish
-            // the timestamps incrementally so the figure view can sync to playback
-            // while later panels are still generating.
+            // Record this panel's start before generating it; publish incrementally
+            // so the section indicator / figure view sync during streaming.
             timestamps.append(PanelTimestamp(panelIndex: i, figureNumber: panel.figureNumber,
                                              panelLabel: panel.label, startTime: cumulativeTime))
             panelTimestamps = timestamps
 
-            // Build figure label prefix, then merge legend + body context via LLM
-            let figLabel = panel.label.isEmpty
-                ? "Figure \(panel.figureNumber)."
-                : "Figure \(panel.figureNumber), panel \(panel.label)."
-            let figRef = panel.label.isEmpty
-                ? "Figure \(panel.figureNumber)"
-                : "Figure \(panel.figureNumber)\(panel.label)"
-            let merged = await LLMCleaner.shared.mergeForFigure(
-                figureRef: figRef,
-                legendText: panel.legendText,
-                contextSentences: panel.textReferences
-            )
-            let narration = ScientificPronunciation.rewrite("\(figLabel) \(merged)")
+            let narration: String
+            if panel.isTextSection {
+                // Abstract / Introduction — say the section name, then the text.
+                narration = ScientificPronunciation.rewrite("\(panel.figureTitle). \(panel.legendText)")
+            } else {
+                let figLabel = panel.label.isEmpty
+                    ? "Figure \(panel.figureNumber)."
+                    : "Figure \(panel.figureNumber), panel \(panel.label)."
+                let figRef = panel.label.isEmpty
+                    ? "Figure \(panel.figureNumber)"
+                    : "Figure \(panel.figureNumber)\(panel.label)"
+                let merged = await LLMCleaner.shared.mergeForFigure(
+                    figureRef: figRef, legendText: panel.legendText, contextSentences: panel.textReferences)
+                narration = ScientificPronunciation.rewrite("\(figLabel) \(merged)")
+            }
 
             var chunkPCM = Data()
             for chunk in TextChunker.chunk(narration) {
@@ -322,24 +315,16 @@ final class PlayerViewModel: ObservableObject {
             cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
             allPCM.append(chunkPCM)
             beginPlaybackIfNeeded()
+
+            // Save at each section boundary, bounding how much a failure can lose.
+            let isLast = i == panels.count - 1
+            if isLast || panels[i + 1].sectionKey != panel.sectionKey { await persistProgress() }
         }
 
         guard generationToken == gen else { return }
         player.finalizeStreaming()
         player.setNowPlaying(title: articleTitle)   // refresh Now Playing duration
-
-        // Save the generated seminar to the library (Saved section), keeping
-        // panel images/legends + timestamps so it replays with the figure view.
-        let wav = WAVBuilder.make(pcmData: allPCM)
-        let stored = zip(panels, timestamps).map { panel, ts in
-            StoredPanel(figureNumber: panel.figureNumber, label: panel.label,
-                        figureTitle: panel.figureTitle, legendText: panel.legendText,
-                        imageURL: panel.imageURL?.absoluteString, startTime: ts.startTime)
-        }
-        let saved = await LibraryManager.shared.save(
-            title: articleTitle, sourceURL: currentSourceURL, wavData: wav,
-            sentences: [], duration: player.duration, kind: .seminar, panels: stored)
-        currentLibraryItemID = saved.id
+        await persistProgress()
     }
 
     private func buildNarration(for panel: FigurePanel) -> String {
@@ -363,12 +348,71 @@ final class PlayerViewModel: ObservableObject {
         if idx != currentPanelIndex { currentPanelIndex = idx }
     }
 
-    /// Seminarize: jump to the next figure panel (skip button).
-    func skipToNextPanel() {
-        let next = currentPanelIndex + 1
-        guard next < panelTimestamps.count else { return }
+    // MARK: - Seminar sections
+
+    /// Label for the current section, e.g. "Abstract", "Introduction", "Figure 1 · A".
+    var currentSectionLabel: String {
+        guard currentPanelIndex < panels.count else { return "" }
+        let p = panels[currentPanelIndex]
+        if p.isTextSection { return p.sectionTitle }
+        return p.label.isEmpty ? p.sectionTitle : "\(p.sectionTitle) · \(p.label)"
+    }
+
+    /// Ordered list of distinct section keys across the whole seminar.
+    private var orderedSectionKeys: [String] {
+        var seen = Set<String>(); var out: [String] = []
+        for p in panels where !seen.contains(p.sectionKey) { seen.insert(p.sectionKey); out.append(p.sectionKey) }
+        return out
+    }
+
+    /// "2 / 7" — current section position among all sections.
+    var sectionProgressLabel: String {
+        let keys = orderedSectionKeys
+        guard currentPanelIndex < panels.count,
+              let pos = keys.firstIndex(of: panels[currentPanelIndex].sectionKey) else { return "" }
+        return "\(pos + 1) / \(keys.count)"
+    }
+
+    /// Number of panels in the figure currently shown (for panel auto-cropping).
+    var panelCountInCurrentFigure: Int {
+        guard currentPanelIndex < panels.count else { return 0 }
+        let fig = panels[currentPanelIndex].figureNumber
+        return panels.filter { $0.figureNumber == fig }.count
+    }
+
+    /// Index of the current panel within its figure (0-based reading order).
+    var panelIndexWithinFigure: Int {
+        guard currentPanelIndex < panels.count else { return 0 }
+        let fig = panels[currentPanelIndex].figureNumber
+        return (0..<currentPanelIndex).reduce(0) { panels[$1].figureNumber == fig ? $0 + 1 : $0 }
+    }
+
+    /// Jumps to the start of the next section (Abstract → Introduction → Figure 1…).
+    /// Only seeks once playback is off the streaming engine (i.e. on replay).
+    func skipToNextSection() {
+        guard player.canSeek, currentPanelIndex < panels.count else { return }
+        let key = panels[currentPanelIndex].sectionKey
+        guard let next = (currentPanelIndex + 1..<panels.count).first(where: { panels[$0].sectionKey != key }),
+              next < panelTimestamps.count else { return }
         player.seekAbsolute(to: panelTimestamps[next].startTime)
         currentPanelIndex = next
+    }
+
+    /// Jumps to the start of the current section, or the previous one if already there.
+    func skipToPreviousSection() {
+        guard player.canSeek, !panels.isEmpty, currentPanelIndex < panels.count else { return }
+        let key = panels[currentPanelIndex].sectionKey
+        var start = currentPanelIndex
+        while start > 0, panels[start - 1].sectionKey == key { start -= 1 }
+        var target = start
+        if start > 0 {                                   // already at section start → previous section
+            let prevKey = panels[start - 1].sectionKey
+            target = start - 1
+            while target > 0, panels[target - 1].sectionKey == prevKey { target -= 1 }
+        }
+        guard target < panelTimestamps.count else { return }
+        player.seekAbsolute(to: panelTimestamps[target].startTime)
+        currentPanelIndex = target
     }
 
     func updateCurrentSentence(at time: TimeInterval) {

@@ -5,7 +5,7 @@ actor OpenAITTS {
 
     init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 60
         self.session = URLSession(configuration: config)
     }
 

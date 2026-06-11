@@ -62,6 +62,10 @@ final class AudioPlayer: ObservableObject {
         currentTime = 0
     }
 
+    /// Seeking is only possible once playback is backed by a loaded WAV
+    /// (AVAudioPlayer); the live streaming engine can't be scrubbed.
+    var canSeek: Bool { avPlayer != nil }
+
     func play() {
         userPaused = false
         if engine != nil {
