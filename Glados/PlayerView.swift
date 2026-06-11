@@ -244,11 +244,20 @@ final class PlayerViewModel: ObservableObject {
         var timestamps: [PanelTimestamp] = []
 
         status = .generating(0, panels.count)
+        let gen = UUID()
+        generationToken = gen
+        player.startStreaming()   // stream into the engine as panels generate
+
         for (i, panel) in panels.enumerated() {
-            guard case .generating = status else { return }
+            guard generationToken == gen else { return }
             status = .generating(i + 1, panels.count)
+
+            // This panel's audio begins at the current cumulative time. Publish
+            // the timestamps incrementally so the figure view can sync to playback
+            // while later panels are still generating.
             timestamps.append(PanelTimestamp(panelIndex: i, figureNumber: panel.figureNumber,
                                              panelLabel: panel.label, startTime: cumulativeTime))
+            panelTimestamps = timestamps
 
             // Build figure label prefix, then merge legend + body context via LLM
             let figLabel = panel.label.isEmpty
@@ -266,22 +275,34 @@ final class PlayerViewModel: ObservableObject {
 
             var chunkPCM = Data()
             for chunk in TextChunker.chunk(narration) {
+                guard generationToken == gen else { return }
                 let stream = try await streamTTS(chunk)
-                for try await data in stream { chunkPCM.append(data) }
+                for try await data in stream {
+                    guard generationToken == gen else { return }
+                    chunkPCM.append(data)
+                    player.appendPCM(data)   // feed playback live
+                }
+                CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
             }
             cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
             allPCM.append(chunkPCM)
+
+            // Once the first figure has audio, reveal the figure player and start
+            // playback while the rest keep generating.
+            if i == 0 {
+                player.setNowPlaying(title: articleTitle)
+                status = .ready
+                player.play()
+            }
         }
 
-        panelTimestamps = timestamps
-        let wav = WAVBuilder.make(pcmData: allPCM)
-        try player.load(wavData: wav)
-        player.setNowPlaying(title: articleTitle)
-        status = .ready
-        player.play()
+        guard generationToken == gen else { return }
+        player.finalizeStreaming()
+        player.setNowPlaying(title: articleTitle)   // refresh Now Playing duration
 
         // Save the generated seminar to the library (Saved section), keeping
         // panel images/legends + timestamps so it replays with the figure view.
+        let wav = WAVBuilder.make(pcmData: allPCM)
         let stored = zip(panels, timestamps).map { panel, ts in
             StoredPanel(figureNumber: panel.figureNumber, label: panel.label,
                         figureTitle: panel.figureTitle, legendText: panel.legendText,
