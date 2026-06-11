@@ -98,6 +98,13 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
+    /// Clears a failed-load screen and returns the Player tab to the Library home.
+    func dismissFailure() {
+        errorMessage = nil
+        pendingURL = nil
+        status = .idle
+    }
+
     func processWebContent(title: String, bodyText: String) {
         showWebReader = false
         Task {
@@ -224,10 +231,10 @@ final class PlayerViewModel: ObservableObject {
         } catch let err as DeepgramError {
             if case .missingAPIKey = err { showAPIKeySetup = true }
             errorMessage = err.localizedDescription
-            status = .idle
+            status = .failed
         } catch {
             errorMessage = error.localizedDescription
-            status = .idle
+            status = .failed
         }
     }
 
@@ -514,7 +521,7 @@ final class PlayerViewModel: ObservableObject {
 }
 
 enum PlayerStatus: Equatable {
-    case idle, fetching, cleaning, ready
+    case idle, fetching, cleaning, ready, failed
     case generating(Int, Int)
 }
 
@@ -834,7 +841,7 @@ struct PlayerView: View {
                     Button {
                         viewModel.showWebReader = true
                     } label: {
-                        Label("Open in browser", systemImage: "safari")
+                        Label("Read full text in browser", systemImage: "safari")
                             .font(.subheadline)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
@@ -842,6 +849,17 @@ struct PlayerView: View {
                             .cornerRadius(10)
                     }
                     .padding(.top, 4)
+                }
+
+                if viewModel.status == .failed {
+                    Button {
+                        viewModel.dismissFailure()
+                    } label: {
+                        Text("Back to Library")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 2)
                 }
             }
             Spacer()
@@ -892,13 +910,15 @@ struct PlayerView: View {
                 .symbolEffect(.variableColor.iterative)
         case .ready:
             EmptyView()
+        case .failed:
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 56)).foregroundColor(.orange)
         }
     }
 
     @ViewBuilder
     private var statusLabel: some View {
         switch viewModel.status {
-        case .idle, .ready: EmptyView()
+        case .idle, .ready, .failed: EmptyView()
         case .fetching:
             Text("Fetching article…").font(.subheadline).foregroundColor(.secondary)
         case .cleaning:

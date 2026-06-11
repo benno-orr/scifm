@@ -247,6 +247,22 @@ actor ArticleProcessor {
     // MARK: - Figure Mode
 
     func processFigures(url: URL) async throws -> ProcessedFigures {
+        // 1. PubMed Central gives clean, structured figure XML — prefer it.
+        if let pmc = try? await figuresFromPMC(url: url), !pmc.panels.isEmpty {
+            return pmc
+        }
+        // 2. Fall back to scraping the publisher's article page. Fresh
+        //    Nature/Cell papers usually aren't in PMC yet, but their HTML
+        //    exposes <figure>/<figcaption> we can read directly. (Sites behind a
+        //    JS/Cloudflare challenge, e.g. Science, yield nothing → clear error.)
+        if let scraped = try? await figuresFromHTML(url: url), !scraped.panels.isEmpty {
+            return scraped
+        }
+        throw ArticleError.figuresUnavailable
+    }
+
+    /// Structured figures from PubMed Central (requires the paper to be in PMC OA).
+    private func figuresFromPMC(url: URL) async throws -> ProcessedFigures {
         // Prefer a PMCID directly in the URL (avoids a DOI round-trip)
         let pmcid: String
         let urlStr = url.absoluteString
@@ -299,27 +315,213 @@ actor ArticleProcessor {
         return URL(string: "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC\(pmcid)/bin/\(href).jpg")
     }
 
+    // MARK: - HTML figure scraping (Nature, Cell, …)
+
+    /// Scrapes figures + captions directly from a publisher's article page.
+    /// Works for sites that serve real server-rendered markup; sites behind a JS
+    /// challenge (Science/Cloudflare) yield no usable <figure> blocks and the
+    /// caller falls through to a clear "figures unavailable" message.
+    private func figuresFromHTML(url: URL) async throws -> ProcessedFigures {
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                         forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        else { throw ArticleError.fetchFailure }
+
+        let title = articleTitleFromHTML(html) ?? "Figures"
+        let contextGroups = extractFigureContextGroups(from: extractArticleTextFromHTML(html))
+
+        let figurePattern = #"<figure[^>]*>([\s\S]*?)</figure>"#
+        guard let regex = try? NSRegularExpression(pattern: figurePattern, options: .caseInsensitive) else {
+            throw ArticleError.parseFailure
+        }
+        let blocks = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+            .compactMap { Range($0.range(at: 1), in: html).map { String(html[$0]) } }
+
+        var allPanels: [FigurePanel] = []
+        var seenNumbers = Set<Int>()
+        for block in blocks {
+            let caption = figureCaption(in: block)
+            // Skip Extended Data / Supplementary figures (separate numbering) and
+            // decorative <figure> elements with no real legend.
+            guard caption.count > 20 else { continue }
+            if caption.range(of: #"^\s*(Extended\s+Data|Supplementary)"#,
+                             options: [.regularExpression, .caseInsensitive]) != nil { continue }
+            guard let number = figureNumber(in: block) else { continue }
+            guard !seenNumbers.contains(number) else { continue }   // dedup repeated thumbnails
+            seenNumbers.insert(number)
+
+            let imgURL = figureImageURL(in: block, base: url)
+            let figTitle = figureTitle(from: caption)
+
+            var panels = splitPanels(caption: caption, figureNumber: number,
+                                     figureTitle: figTitle, imageURL: imgURL)
+            panels = panels.map { panel in
+                let panelKey = "\(number)\(panel.label.uppercased())"
+                let figKey   = "\(number)"
+                let sentences = contextGroups[panelKey] ?? contextGroups[figKey] ?? []
+                return FigurePanel(figureNumber: panel.figureNumber, figureTitle: panel.figureTitle,
+                                   label: panel.label, legendText: panel.legendText,
+                                   textReferences: sentences, imageURL: panel.imageURL)
+            }
+            allPanels.append(contentsOf: panels)
+        }
+
+        guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
+        return ProcessedFigures(title: title, panels: allPanels)
+    }
+
+    private func articleTitleFromHTML(_ html: String) -> String? {
+        let patterns = [
+            #"<meta[^>]+property="og:title"[^>]+content="([^"]+)""#,
+            #"<meta[^>]+name="citation_title"[^>]+content="([^"]+)""#,
+            #"<title[^>]*>([\s\S]*?)</title>"#,
+        ]
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+               let m = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+               let r = Range(m.range(at: 1), in: html) {
+                let t = htmlToPlainText(String(html[r])).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { return t }
+            }
+        }
+        return nil
+    }
+
+    /// Figure number from a <figure> block's id (e.g. id="Fig1") or its caption.
+    private func figureNumber(in block: String) -> Int? {
+        let patterns = [#"id="[Ff]ig(?:ure)?[-_]?(\d+)""#,
+                        #"Fig(?:ure)?\.?\s*(\d+)"#]
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+               let m = regex.firstMatch(in: block, range: NSRange(block.startIndex..., in: block)),
+               let r = Range(m.range(at: 1), in: block),
+               let n = Int(block[r]) { return n }
+        }
+        return nil
+    }
+
+    /// Plain-text caption (title + legend) for a <figure> block, with publisher
+    /// UI affordances ("Full size image" etc.) stripped out.
+    private func figureCaption(in block: String) -> String {
+        // Publishers bold the panel letter ("<b>a</b>, …") instead of writing
+        // "(a)". Convert those to parenthesised form so splitPanels can find them.
+        // A single letter inside <b>/<strong> followed by a comma/period is a
+        // panel marker; the figure title (multi-word bold) won't match.
+        var pre = block
+        if let re = try? NSRegularExpression(pattern: #"<(?:b|strong)[^>]*>\s*([A-Za-z])\s*</(?:b|strong)>\s*[,.]"#,
+                                             options: .caseInsensitive) {
+            pre = re.stringByReplacingMatches(in: pre, range: NSRange(pre.startIndex..., in: pre),
+                                              withTemplate: " ($1) ")
+        }
+        var text = htmlToPlainText(pre)
+        let noise = ["Full size image", "Full size table", "Download figure",
+                     "Open in new tab", "Open in viewer", "Source data",
+                     "View in article", "Download high-res image",
+                     "Download : Download", "Download all slides",
+                     "The alternative text for this image may have been generated using AI"]
+        for n in noise {
+            text = text.replacingOccurrences(of: n, with: " ", options: .caseInsensitive)
+        }
+        return text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                   .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Short figure title: drops the "Fig. N:" prefix and keeps the lead clause.
+    private func figureTitle(from caption: String) -> String {
+        var t = caption
+        if let r = t.range(of: #"^\s*(?:Extended\s+Data\s+)?Fig(?:ure)?\.?\s*\d+\s*[:.\-–]\s*"#,
+                           options: [.regularExpression, .caseInsensitive]) {
+            t = String(t[r.upperBound...])
+        }
+        // Title runs up to the first sentence break (before the first panel).
+        let title = String(t.prefix(while: { $0 != "." })).trimmingCharacters(in: .whitespaces)
+        return String(title.prefix(120))
+    }
+
+    /// First plausible figure-image URL in a <figure> block (handles srcset,
+    /// data-src, src, protocol-relative `//…`, and relative paths).
+    private func figureImageURL(in block: String, base: URL) -> URL? {
+        var candidates: [String] = []
+        if let re = try? NSRegularExpression(pattern: #"srcset="([^"]+)""#, options: .caseInsensitive) {
+            for m in re.matches(in: block, range: NSRange(block.startIndex..., in: block)) {
+                if let r = Range(m.range(at: 1), in: block) {
+                    let set = String(block[r])
+                    let last = set.split(separator: ",").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? set
+                    candidates.append(last.split(separator: " ").first.map(String.init) ?? last)
+                }
+            }
+        }
+        for attr in ["data-src", "src"] {
+            if let re = try? NSRegularExpression(pattern: "\(attr)=\"([^\"]+)\"", options: .caseInsensitive) {
+                for m in re.matches(in: block, range: NSRange(block.startIndex..., in: block)) {
+                    if let r = Range(m.range(at: 1), in: block) { candidates.append(String(block[r])) }
+                }
+            }
+        }
+        for raw in candidates {
+            var s = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "&amp;", with: "&")
+            let lower = s.lowercased()
+            if lower.hasPrefix("data:") || lower.contains(".svg") { continue }
+            if s.hasPrefix("//") { s = "https:" + s }
+            let looksImage = lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png")
+                || lower.contains(".webp") || lower.contains(".gif")
+                || lower.contains("springer-static") || lower.contains("media.springernature")
+                || lower.contains("/cms/attachment")
+            guard looksImage, let u = URL(string: s, relativeTo: base)?.absoluteURL else { continue }
+            return u
+        }
+        return nil
+    }
+
+    /// Strips HTML tags and decodes common entities from a small fragment.
+    private func htmlToPlainText(_ fragment: String) -> String {
+        var text = fragment
+        for tag in ["script", "style"] {
+            let p = "<\(tag)[^>]*>[\\s\\S]*?</\(tag)>"
+            text = (try? NSRegularExpression(pattern: p, options: .caseInsensitive))?
+                .stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "") ?? text
+        }
+        text = (try? NSRegularExpression(pattern: "<[^>]+>"))?
+            .stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ") ?? text
+        let entities: [(String, String)] = [
+            ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "),
+            ("&quot;", "\""), ("&#x27;", "'"), ("&#39;", "'"), ("&apos;", "'"),
+            ("&mdash;", "—"), ("&ndash;", "–"), ("&hellip;", "…"), ("&times;", "×"),
+        ]
+        for (e, r) in entities { text = text.replacingOccurrences(of: e, with: r) }
+        text = (try? NSRegularExpression(pattern: "&#x?[0-9A-Fa-f]+;"))?
+            .stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ") ?? text
+        return text
+    }
+
     private func splitPanels(caption: String, figureNumber: Int, figureTitle: String, imageURL: URL?) -> [FigurePanel] {
-        let pattern = #"\(([A-Z])\)"#
+        let pattern = #"\(([A-Za-z])\)"#
         if let regex = try? NSRegularExpression(pattern: pattern) {
             let matches = regex.matches(in: caption, range: NSRange(caption.startIndex..., in: caption))
-            if !matches.isEmpty {
+            // Keep only the FIRST occurrence of each panel label, in document
+            // order. Legends often repeat a letter as a cross-reference ("…as in
+            // c…"); without this, those would spawn spurious duplicate panels.
+            var boundaries: [(label: String, range: Range<String.Index>)] = []
+            var seen = Set<String>()
+            for match in matches {
+                guard let labelRange = Range(match.range(at: 1), in: caption),
+                      let matchRange  = Range(match.range, in: caption) else { continue }
+                let label = String(caption[labelRange]).uppercased()
+                guard !seen.contains(label) else { continue }
+                seen.insert(label)
+                boundaries.append((label, matchRange))
+            }
+            if !boundaries.isEmpty {
                 var panels: [FigurePanel] = []
-                for (i, match) in matches.enumerated() {
-                    guard let labelRange = Range(match.range(at: 1), in: caption),
-                          let matchRange  = Range(match.range, in: caption) else { continue }
-                    let label = String(caption[labelRange])
-                    let textStart = matchRange.upperBound
-                    let textEnd: String.Index
-                    if i + 1 < matches.count, let nextRange = Range(matches[i + 1].range, in: caption) {
-                        textEnd = nextRange.lowerBound
-                    } else {
-                        textEnd = caption.endIndex
-                    }
+                for (i, b) in boundaries.enumerated() {
+                    let textStart = b.range.upperBound
+                    let textEnd = (i + 1 < boundaries.count) ? boundaries[i + 1].range.lowerBound : caption.endIndex
                     let legendText = String(caption[textStart..<textEnd])
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     panels.append(FigurePanel(figureNumber: figureNumber, figureTitle: figureTitle,
-                                              label: label, legendText: legendText,
+                                              label: b.label, legendText: legendText,
                                               textReferences: [], imageURL: imageURL))
                 }
                 if !panels.isEmpty { return panels }
