@@ -131,22 +131,44 @@ final class PlayerViewModel: ObservableObject {
         }
         generationToken = UUID()   // abort any in-flight generation
         player.stop()
-        mode = .narration   // saved items are narration audio
-        sentences = []
-        currentSentenceIndex = 0
+        sentences = []; currentSentenceIndex = 0
+        panels = []; panelTimestamps = []; currentPanelIndex = 0
         status = .fetching
         errorMessage = nil
 
         guard let wavData = await LibraryManager.shared.audioData(for: item) else {
-            errorMessage = "Could not load audio file."
-            status = .idle
+            // Entry created but audio not yet generated (e.g. interrupted) —
+            // regenerate from the original source.
+            if let url = URL(string: item.sourceURL) {
+                load(url: url, kind: item.contentKind)
+            } else {
+                errorMessage = "Could not load audio file."
+                status = .idle
+            }
             return
         }
         do {
-            sentences = item.sentences.map { SentenceTimestamp(text: $0.text, startTime: $0.startTime) }
             articleTitle = item.title
             currentLibraryItemID = item.id
             currentSourceURL = item.sourceURL
+            currentKind = item.contentKind
+
+            if item.contentKind == .seminar, let stored = item.panels, !stored.isEmpty {
+                mode = .figure
+                panels = stored.map {
+                    FigurePanel(figureNumber: $0.figureNumber, figureTitle: $0.figureTitle,
+                                label: $0.label, legendText: $0.legendText,
+                                textReferences: [], imageURL: $0.imageURL.flatMap { URL(string: $0) })
+                }
+                panelTimestamps = stored.enumerated().map { i, p in
+                    PanelTimestamp(panelIndex: i, figureNumber: p.figureNumber,
+                                   panelLabel: p.label, startTime: p.startTime)
+                }
+            } else {
+                mode = .narration
+                sentences = item.sentences.map { SentenceTimestamp(text: $0.text, startTime: $0.startTime) }
+            }
+
             try player.load(wavData: wavData)
             if item.lastPlayedTime > 0 { player.seekAbsolute(to: item.lastPlayedTime) }
             player.setNowPlaying(title: item.title)
@@ -236,6 +258,18 @@ final class PlayerViewModel: ObservableObject {
         player.setNowPlaying(title: articleTitle)
         status = .ready
         player.play()
+
+        // Save the generated seminar to the library (Saved section), keeping
+        // panel images/legends + timestamps so it replays with the figure view.
+        let stored = zip(panels, timestamps).map { panel, ts in
+            StoredPanel(figureNumber: panel.figureNumber, label: panel.label,
+                        figureTitle: panel.figureTitle, legendText: panel.legendText,
+                        imageURL: panel.imageURL?.absoluteString, startTime: ts.startTime)
+        }
+        let saved = await LibraryManager.shared.save(
+            title: articleTitle, sourceURL: currentSourceURL, wavData: wav,
+            sentences: [], duration: player.duration, kind: .seminar, panels: stored)
+        currentLibraryItemID = saved.id
     }
 
     private func buildNarration(for panel: FigurePanel) -> String {
@@ -405,6 +439,12 @@ final class PlayerViewModel: ObservableObject {
         // Estimate the TTS spend and let the user cancel before we make the call.
         guard await confirmCost(chars: llmCleaned.count) else { status = .idle; return }
 
+        // Record the doc in the library now (under Reading) so it's tracked even
+        // before generation finishes; audio is filled in by finalizeEntry below.
+        let entry = await LibraryManager.shared.startEntry(
+            title: article.title, sourceURL: currentSourceURL, kind: currentKind)
+        currentLibraryItemID = entry.id
+
         var allPCM = Data()
         var cumulativeTime: TimeInterval = 0
         var built: [SentenceTimestamp] = []
@@ -442,15 +482,11 @@ final class PlayerViewModel: ObservableObject {
         player.finalizeStreaming()
         player.setNowPlaying(title: article.title)  // Update duration in Now Playing
 
-        // Save complete WAV to library in background
+        // Fill in the audio + transcript for the entry created at the start.
         let wav = WAVBuilder.make(pcmData: allPCM)
         let stored = built.map { StoredSentence(text: $0.text, startTime: $0.startTime) }
-        let savedItem = await LibraryManager.shared.save(
-            title: article.title, sourceURL: currentSourceURL,
-            wavData: wav, sentences: stored, duration: player.duration,
-            kind: currentKind
-        )
-        currentLibraryItemID = savedItem.id
+        await LibraryManager.shared.finalizeEntry(
+            entry.id, wavData: wav, sentences: stored, duration: player.duration)
     }
 }
 

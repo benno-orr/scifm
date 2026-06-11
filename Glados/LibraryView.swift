@@ -7,11 +7,16 @@ struct LibraryListView: View {
     @State private var items: [LibraryItem] = []
     @State private var filter: Filter = .reading
 
-    enum Filter: String, CaseIterable { case reading = "Reading", read = "Read" }
+    enum Filter: String, CaseIterable { case reading = "Reading", read = "Read", saved = "Saved" }
 
-    private var reading: [LibraryItem] { items.filter { !$0.isFinished } }
-    private var read: [LibraryItem]    { items.filter { $0.isFinished } }
-    private var shown: [LibraryItem]   { filter == .reading ? reading : read }
+    // Seminars live in their own Saved section; Reading/Read are the narration docs.
+    private var shown: [LibraryItem] {
+        switch filter {
+        case .reading: return items.filter { $0.contentKind != .seminar && !$0.isFinished }
+        case .read:    return items.filter { $0.contentKind != .seminar && $0.isFinished }
+        case .saved:   return items.filter { $0.contentKind == .seminar }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,20 +43,31 @@ struct LibraryListView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: filter == .reading ? "headphones" : "checkmark.circle")
+            Image(systemName: emptyIcon)
                 .font(.system(size: 52))
                 .foregroundColor(.secondary)
-            Text(filter == .reading ? "Nothing in progress" : "Nothing finished yet")
-                .font(.headline)
-            Text(filter == .reading
-                 ? "Articles you start appear here until you finish them."
-                 : "Articles you listen to the end move here.")
+            Text(emptyTitle).font(.headline)
+            Text(emptyDetail)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyIcon: String {
+        switch filter { case .reading: return "headphones"; case .read: return "checkmark.circle"; case .saved: return "rectangle.3.group" }
+    }
+    private var emptyTitle: String {
+        switch filter { case .reading: return "Nothing in progress"; case .read: return "Nothing finished yet"; case .saved: return "No seminars yet" }
+    }
+    private var emptyDetail: String {
+        switch filter {
+        case .reading: return "Articles you start appear here until you finish them."
+        case .read:    return "Articles you listen to the end move here."
+        case .saved:   return "Seminars you generate from the Papers tab are saved here."
+        }
     }
 
     private var list: some View {
@@ -64,16 +80,18 @@ struct LibraryListView: View {
                 }
                 .buttonStyle(.plain)
                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    if item.isFinished {
-                        Button {
-                            setFinished(item.id, false)
-                        } label: { Label("Mark unread", systemImage: "arrow.uturn.backward") }
-                        .tint(.orange)
-                    } else {
-                        Button {
-                            setFinished(item.id, true)
-                        } label: { Label("Mark read", systemImage: "checkmark") }
-                        .tint(.accentColor)
+                    if item.contentKind != .seminar {
+                        if item.isFinished {
+                            Button {
+                                setFinished(item.id, false)
+                            } label: { Label("Mark unread", systemImage: "arrow.uturn.backward") }
+                            .tint(.orange)
+                        } else {
+                            Button {
+                                setFinished(item.id, true)
+                            } label: { Label("Mark read", systemImage: "checkmark") }
+                            .tint(.accentColor)
+                        }
                     }
                 }
             }
@@ -113,7 +131,11 @@ struct LibraryListView: View {
             .font(.caption)
             .foregroundColor(.secondary)
 
-            if item.isFinished {
+            if item.contentKind == .seminar {
+                if item.progressFraction > 0 {
+                    ProgressView(value: item.progressFraction).tint(.accentColor).padding(.top, 2)
+                }
+            } else if item.isFinished {
                 Button { setFinished(item.id, false) } label: {
                     Label("Finished", systemImage: "checkmark.circle.fill")
                         .font(.caption2).foregroundColor(.accentColor)

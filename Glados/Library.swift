@@ -42,6 +42,8 @@ struct LibraryItem: Codable, Identifiable {
     var lastPlayedTime: TimeInterval
     /// Optional for backward-compatibility with items saved before tags existed.
     var kind: ContentKind?
+    /// Set for saved seminars; lets the figure player be rebuilt on replay.
+    var panels: [StoredPanel]?
 
     var contentKind: ContentKind { kind ?? .other }
 
@@ -63,6 +65,17 @@ struct LibraryItem: Codable, Identifiable {
 
 struct StoredSentence: Codable {
     var text: String
+    var startTime: TimeInterval
+}
+
+/// A figure panel persisted with a saved seminar, enough to rebuild the
+/// figure player on replay.
+struct StoredPanel: Codable {
+    var figureNumber: Int
+    var label: String
+    var figureTitle: String
+    var legendText: String
+    var imageURL: String?
     var startTime: TimeInterval
 }
 
@@ -93,7 +106,7 @@ actor LibraryManager {
 
     func save(title: String, sourceURL: String, wavData: Data,
               sentences: [StoredSentence], duration: TimeInterval,
-              kind: ContentKind = .other) -> LibraryItem {
+              kind: ContentKind = .other, panels: [StoredPanel]? = nil) -> LibraryItem {
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         let id = UUID()
         let fileName = "\(id.uuidString).wav"
@@ -102,10 +115,36 @@ actor LibraryManager {
         let item = LibraryItem(id: id, title: title, sourceURL: sourceURL,
                                dateAdded: Date(), duration: duration,
                                audioFileName: fileName, sentences: sentences,
-                               lastPlayedTime: 0, kind: kind, markedFinished: false)
+                               lastPlayedTime: 0, kind: kind, panels: panels,
+                               markedFinished: false)
         items.insert(item, at: 0)
         persist()
         return item
+    }
+
+    /// Creates a Library entry the moment generation starts, so the doc shows
+    /// up (under Reading) immediately. Audio is written later by `finalizeEntry`.
+    func startEntry(title: String, sourceURL: String, kind: ContentKind) -> LibraryItem {
+        let id = UUID()
+        let item = LibraryItem(id: id, title: title, sourceURL: sourceURL,
+                               dateAdded: Date(), duration: 0,
+                               audioFileName: "\(id.uuidString).wav", sentences: [],
+                               lastPlayedTime: 0, kind: kind, panels: nil, markedFinished: false)
+        items.insert(item, at: 0)
+        persist()
+        return item
+    }
+
+    /// Writes the finished audio + metadata for an entry created by `startEntry`.
+    func finalizeEntry(_ id: UUID, wavData: Data, sentences: [StoredSentence],
+                       duration: TimeInterval, panels: [StoredPanel]? = nil) {
+        guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        try? wavData.write(to: audioDir.appendingPathComponent(items[idx].audioFileName))
+        items[idx].sentences = sentences
+        items[idx].duration = duration
+        if let panels { items[idx].panels = panels }
+        persist()
     }
 
     /// Explicitly mark an item read/unread (manual button).

@@ -22,8 +22,7 @@ struct ReviewsView: View {
                             article: article,
                             onTap: { selectedArticle = article },
                             onReadFull: { viewModel.load(url: article.url, kind: .review); selectedTab = 0 },
-                            abstractText: { await resolveAbstract(article) },
-                            onSeminarize: { viewModel.load(url: article.url, kind: .seminar); selectedTab = 0 }
+                            abstractText: { await resolveAbstract(article) }
                         )
                     }
                     .listStyle(.plain)

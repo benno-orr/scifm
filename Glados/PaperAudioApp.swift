@@ -28,10 +28,6 @@ struct SciFMApp: App {
                 PrimaryView(selectedTab: $selectedTab)
                     .tabItem { Label("Papers", systemImage: "doc.text.magnifyingglass") }
                     .tag(3)
-
-                SeminarizeView(selectedTab: $selectedTab)
-                    .tabItem { Label("Seminarize", systemImage: "rectangle.3.group") }
-                    .tag(4)
             }
             .environmentObject(playerViewModel)
             .preferredColorScheme(.dark)
