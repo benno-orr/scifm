@@ -118,13 +118,20 @@ struct ArticleRow: View {
                 }
                 .buttonStyle(.plain)
 
-                HStack(spacing: 6) {
-                    Text(article.source).fontWeight(.semibold).foregroundColor(.accentColor)
-                    Text("·")
-                    Text(article.label)
-                    if let date = article.publishedDate {
-                        Text("·"); Text(date, style: .relative); Text("ago")
+                HStack(alignment: .center, spacing: 6) {
+                    // Journal and article type on sequential lines
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(article.source).fontWeight(.semibold).foregroundColor(.accentColor)
+                        HStack(spacing: 4) {
+                            Text(article.label)
+                            if let date = article.publishedDate {
+                                Text("·"); Text(timeSince(date))
+                            }
+                        }
+                        .foregroundColor(.secondary)
                     }
+                    .font(.caption2)
+
                     if !stacked {
                         Spacer()
                         speakerButton
@@ -135,7 +142,6 @@ struct ArticleRow: View {
                         if let onSeminarize { seminarizeButton(onSeminarize) }
                     }
                 }
-                .font(.caption2).foregroundColor(.secondary)
             }
 
             if stacked {
@@ -148,6 +154,15 @@ struct ArticleRow: View {
         }
         .padding(.vertical, 6)
         .task { if thumbnailURL == nil { thumbnailURL = await FeedManager.shared.fetchThumbnail(for: article) } }
+    }
+
+    /// Compact time since publication, no "ago". Past 24h, days only.
+    private func timeSince(_ date: Date) -> String {
+        let s = Date().timeIntervalSince(date)
+        if s < 60 { return "now" }
+        if s < 3600 { return "\(Int(s / 60))m" }
+        if s < 86400 { return "\(Int(s / 3600))h" }
+        return "\(Int(s / 86400))d"
     }
 
     private var speakerButton: some View {
