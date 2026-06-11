@@ -80,10 +80,10 @@ actor FeedManager {
             urlMustContain: nil, dcTypesAllowed: nil
         ),
         FeedSource(
-            name: "Science", label: "Perspective",
+            name: "Science", label: "Review",
             rssURL: URL(string: "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science")!,
             urlMustContain: nil,
-            dcTypesAllowed: ["Perspective", "Review"]
+            dcTypesAllowed: ["Review"]
         ),
     ]
 
@@ -92,12 +92,12 @@ actor FeedManager {
     // The Nature RSS feed routes through an auth/cookie redirect that URLSession
     // can't reliably follow, so the briefings are scraped from the HTML listing.
     private let sources: [FeedSource] = [
-        // Science Perspectives and In Depth are their N&V equivalents
+        // Science Features and Perspectives are editorial/analysis pieces
         FeedSource(
-            name: "Science", label: "Perspectives",
+            name: "Science", label: "Perspective",
             rssURL: URL(string: "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science")!,
             urlMustContain: nil,
-            dcTypesAllowed: ["Perspective", "In Depth", "Feature", "Research Highlights"]
+            dcTypesAllowed: ["Feature", "Perspective"]
         ),
         // Cell eTOC — URLSession bypasses the Cloudflare challenge curl hits
         FeedSource(
@@ -183,10 +183,10 @@ actor FeedManager {
 
     private let primarySources: [FeedSource] = [
         FeedSource(
-            name: "Science", label: "Research",
+            name: "Science", label: "Research Article",
             rssURL: URL(string: "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science")!,
             urlMustContain: nil,
-            dcTypesAllowed: ["Research Article", "Report"]
+            dcTypesAllowed: ["Research Article"]
         ),
         FeedSource(
             name: "Cell", label: "Article",

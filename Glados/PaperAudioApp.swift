@@ -26,7 +26,7 @@ struct SciFMApp: App {
                     .tag(2)
 
                 PrimaryView(selectedTab: $selectedTab)
-                    .tabItem { Label("Primary", systemImage: "doc.text.magnifyingglass") }
+                    .tabItem { Label("Papers", systemImage: "doc.text.magnifyingglass") }
                     .tag(3)
 
                 SeminarizeView(selectedTab: $selectedTab)

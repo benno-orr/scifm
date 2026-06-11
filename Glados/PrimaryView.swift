@@ -30,7 +30,7 @@ struct PrimaryView: View {
                 }
             }
             .charcoalBackdrop()
-            .navigationTitle("Primary")
+            .navigationTitle("Papers")
             .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Title, keyword, author, DOI…")
             .onSubmit(of: .search) { Task { await search() } }
