@@ -305,6 +305,14 @@ private struct CharcoalBackdrop: ViewModifier {
                     RadialGradient(
                         colors: [Color.white.opacity(0.05), .clear],
                         center: .top, startRadius: 0, endRadius: 520)
+                    GeometryReader { geo in
+                        Image("LogoMark")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: geo.size.width * 1.5)
+                            .opacity(0.25)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                    }
                 }
                 .ignoresSafeArea()
             )
