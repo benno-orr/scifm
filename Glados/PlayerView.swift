@@ -782,21 +782,23 @@ struct PlayerView: View {
                 }
             }
             .charcoalBackdrop()
-            .navigationTitle(viewModel.status == .idle ? "Library" : "sciFM")
-            .navigationBarItems(trailing:
-                Button { viewModel.showAPIKeySetup = true } label: {
+            .navigationTitle(viewModel.status == .idle ? "" : "sciFM")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(
+                leading: costRibbon,
+                trailing: Button { viewModel.showAPIKeySetup = true } label: {
                     Image(systemName: "gearshape")
                 }
             )
         }
     }
 
-    // Idle: the home / Library tab — spend box, paste field, Reading/Read list.
+    // Idle: the home / Library tab — Reading/Read/Saved list, paste field at the
+    // bottom. (Cost + gear live in the header ribbon; no title — the tab bar names it.)
     private var libraryHome: some View {
-        VStack(spacing: 12) {
-            costBox.padding(.top, 8)
-            pasteURLField
+        VStack(spacing: 0) {
             LibraryListView()
+            pasteURLField.padding(.vertical, 8)
         }
     }
 
@@ -839,28 +841,16 @@ struct PlayerView: View {
         }
     }
 
-    private var costBox: some View {
-        HStack(spacing: 0) {
-            costStat("Today", costTracker.todayTotal)
-            Divider().frame(height: 34)
-            costStat("All time", costTracker.allTimeTotal)
+    // Compact API-spend readout for the header ribbon (today over all-time).
+    private var costRibbon: some View {
+        VStack(alignment: .leading, spacing: -1) {
+            Text("\(currency(costTracker.todayTotal)) today")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.primary)
+            Text("\(currency(costTracker.allTimeTotal)) all-time")
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundColor(.secondary)
         }
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
-        .padding(.horizontal)
-    }
-
-    private func costStat(_ label: String, _ value: Double) -> some View {
-        VStack(spacing: 3) {
-            Text(label.uppercased())
-                .font(.caption2).foregroundColor(.secondary)
-            Text(currency(value))
-                .font(.title3.monospacedDigit().weight(.semibold))
-            Text("API spend").font(.caption2).foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity)
     }
 
     @State private var pastedURL = ""
