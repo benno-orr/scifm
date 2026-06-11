@@ -79,6 +79,7 @@ struct LibraryListView: View {
                     row(item)
                 }
                 .buttonStyle(.plain)
+                .listRowBackground(Color.rowTranslucent)
                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
                     if item.contentKind != .seminar {
                         if item.isFinished {

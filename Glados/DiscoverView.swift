@@ -24,6 +24,7 @@ struct DiscoverView: View {
                             onReadFull: { viewModel.load(url: article.url, kind: .editorial); selectedTab = 0 },
                             abstractText: { await resolveAbstract(article) }
                         )
+                        .listRowBackground(Color.rowTranslucent)
                     }
                     .listStyle(.plain)
                 }
@@ -290,6 +291,11 @@ extension View {
     /// Charcoal gradient backdrop with a transparent scroll background, for the
     /// app's dark theme. No-op on non-scrolling views beyond the background.
     func charcoalBackdrop() -> some View { modifier(CharcoalBackdrop()) }
+}
+
+extension Color {
+    /// Semi-transparent row fill so the background watermark shows through.
+    static let rowTranslucent = Color(white: 0.10).opacity(0.4)
 }
 
 private struct CharcoalBackdrop: ViewModifier {

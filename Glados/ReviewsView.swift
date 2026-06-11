@@ -24,6 +24,7 @@ struct ReviewsView: View {
                             onReadFull: { viewModel.load(url: article.url, kind: .review); selectedTab = 0 },
                             abstractText: { await resolveAbstract(article) }
                         )
+                        .listRowBackground(Color.rowTranslucent)
                     }
                     .listStyle(.plain)
                 }

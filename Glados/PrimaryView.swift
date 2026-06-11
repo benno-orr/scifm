@@ -97,6 +97,7 @@ struct PrimaryView: View {
                     onSeminarize: { viewModel.load(url: article.url, kind: .seminar); selectedTab = 0 },
                     stacked: true
                 )
+                .listRowBackground(Color.rowTranslucent)
                 .grayscale(isHidden ? 1 : 0)
                 .opacity(isHidden ? 0.45 : 1)
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -133,6 +134,7 @@ struct PrimaryView: View {
                     onSeminarize: { viewModel.load(url: result.articleURL, kind: .seminar); selectedTab = 0 },
                     stacked: true
                 )
+                .listRowBackground(Color.rowTranslucent)
             }
             .listStyle(.plain)
         }
