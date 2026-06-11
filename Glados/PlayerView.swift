@@ -85,6 +85,13 @@ final class PlayerViewModel: ObservableObject {
         currentKind = kind
         mode = (kind == .seminar) ? .figure : .narration
         if mode == .figure {
+            // Show the loading screen immediately and clear stale panel state so
+            // the figure player isn't rendered against a previous session before
+            // loadFigures (async) runs.
+            status = .fetching
+            panels = []
+            panelTimestamps = []
+            currentPanelIndex = 0
             Task { await loadFigures(url: url) }
         } else {
             showWebReader = true
