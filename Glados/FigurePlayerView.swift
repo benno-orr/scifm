@@ -34,7 +34,7 @@ struct FigurePlayerView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button { viewModel.showAPIKeySetup = true } label: {
-                Image(systemName: "key").font(.caption).foregroundColor(.secondary)
+                Image(systemName: "gearshape").font(.caption).foregroundColor(.secondary)
             }
             Button { viewModel.stop() } label: {
                 Image(systemName: "xmark").font(.caption).foregroundColor(.secondary)

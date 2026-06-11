@@ -611,7 +611,7 @@ struct PlayerView: View {
                     }
                 }
                 Button { viewModel.showAPIKeySetup = true } label: {
-                    Image(systemName: "key").font(.caption).foregroundColor(.secondary)
+                    Image(systemName: "gearshape").font(.caption).foregroundColor(.secondary)
                 }
                 Button { viewModel.stop() } label: {
                     Image(systemName: "xmark").font(.caption).foregroundColor(.secondary)
@@ -722,7 +722,7 @@ struct PlayerView: View {
             .navigationTitle(viewModel.status == .idle ? "Library" : "sciFM")
             .navigationBarItems(trailing:
                 Button { viewModel.showAPIKeySetup = true } label: {
-                    Image(systemName: "key")
+                    Image(systemName: "gearshape")
                 }
             )
         }

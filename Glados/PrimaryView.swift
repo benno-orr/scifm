@@ -16,6 +16,9 @@ struct PrimaryView: View {
     @State private var feedError = false
     @State private var selectedArticle: FeedArticle? = nil
 
+    @ObservedObject private var hidden = HiddenPapers.shared
+    @AppStorage("showHiddenPapers") private var showHidden = false
+
     private var isSearchActive: Bool {
         !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty
     }
@@ -34,6 +37,13 @@ struct PrimaryView: View {
             .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Title, keyword, author, DOI…")
             .onSubmit(of: .search) { Task { await search() } }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showHidden.toggle() } label: {
+                        Image(systemName: showHidden ? "eye" : "eye.slash")
+                    }
+                }
+            }
             .onChange(of: searchQuery) { _, q in
                 if q.trimmingCharacters(in: .whitespaces).isEmpty { results = []; hasSearched = false }
             }
@@ -74,7 +84,11 @@ struct PrimaryView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List(feed) { article in
+            // When "show hidden" is off, drop hidden papers entirely; when on,
+            // keep them but render greyed.
+            let shown = showHidden ? feed : feed.filter { !hidden.isHidden($0.id) }
+            List(shown) { article in
+                let isHidden = hidden.isHidden(article.id)
                 ArticleRow(
                     article: article,
                     onTap: { viewModel.load(url: article.url, kind: .primary); selectedTab = 0 },
@@ -83,6 +97,17 @@ struct PrimaryView: View {
                     onSeminarize: { viewModel.load(url: article.url, kind: .seminar); selectedTab = 0 },
                     stacked: true
                 )
+                .grayscale(isHidden ? 1 : 0)
+                .opacity(isHidden ? 0.45 : 1)
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    if isHidden {
+                        Button { hidden.unhide(article.id) } label: { Label("Unhide", systemImage: "eye") }
+                            .tint(.blue)
+                    } else {
+                        Button { hidden.hide(article.id) } label: { Label("Hide", systemImage: "eye.slash") }
+                            .tint(.gray)
+                    }
+                }
             }
             .listStyle(.plain)
         }
@@ -137,4 +162,24 @@ struct PrimaryView: View {
         hasSearched = true
         isSearching = false
     }
+}
+
+// MARK: - Hidden papers store
+
+/// Persists the set of paper IDs the user has hidden from the Papers feed.
+@MainActor
+final class HiddenPapers: ObservableObject {
+    static let shared = HiddenPapers()
+    @Published private(set) var ids: Set<String> = []
+    private let key = "hiddenPaperIDs"
+
+    private init() {
+        if let arr = UserDefaults.standard.array(forKey: key) as? [String] { ids = Set(arr) }
+    }
+
+    func isHidden(_ id: String) -> Bool { ids.contains(id) }
+    func hide(_ id: String)   { ids.insert(id); save() }
+    func unhide(_ id: String) { ids.remove(id); save() }
+
+    private func save() { UserDefaults.standard.set(Array(ids), forKey: key) }
 }
