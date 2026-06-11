@@ -138,7 +138,7 @@ final class AudioPlayer: ObservableObject {
     /// Append a raw int16 24 kHz PCM chunk. Playback begins automatically once
     /// `prebufferSeconds` of audio is queued (or on finalize, for shorter clips).
     func appendPCM(_ data: Data) {
-        guard let pn = playerNode, let _ = engine, !data.isEmpty else { return }
+        guard let pn = playerNode, engine != nil, !data.isEmpty else { return }
         let frameCount = data.count / 2
         guard let buf = AVAudioPCMBuffer(pcmFormat: AudioPlayer.streamFmt,
                                          frameCapacity: AVAudioFrameCount(frameCount)) else { return }
@@ -148,7 +148,24 @@ final class AudioPlayer: ObservableObject {
             let dst = buf.floatChannelData![0]
             for i in 0..<frameCount { dst[i] = Float(src[i]) / 32768.0 }
         }
-        streamingDuration += Double(frameCount) / 24000.0
+        enqueue(buf, pn)
+    }
+
+    /// Schedules `seconds` of silence — used to bridge TTS underruns and to
+    /// insert deliberate pauses (e.g. after a section title).
+    func appendSilence(_ seconds: Double) {
+        guard seconds > 0, let pn = playerNode, engine != nil else { return }
+        let frameCount = Int(seconds * 24000)
+        guard frameCount > 0,
+              let buf = AVAudioPCMBuffer(pcmFormat: AudioPlayer.streamFmt,
+                                         frameCapacity: AVAudioFrameCount(frameCount)) else { return }
+        buf.frameLength = AVAudioFrameCount(frameCount)
+        memset(buf.floatChannelData![0], 0, frameCount * MemoryLayout<Float>.size)
+        enqueue(buf, pn)
+    }
+
+    private func enqueue(_ buf: AVAudioPCMBuffer, _ pn: AVAudioPlayerNode) {
+        streamingDuration += Double(buf.frameLength) / 24000.0
         duration = streamingDuration
         pendingBuffers += 1
         pn.scheduleBuffer(buf, completionCallbackType: .dataPlayedBack) { [weak self] _ in
@@ -183,6 +200,13 @@ final class AudioPlayer: ObservableObject {
     /// buffer has played out. (AVAudioPlayerNode.isPlaying stays true after the
     /// queue drains, so buffer accounting is the only reliable signal.)
     private func checkStreamingComplete() {
+        // Generation fell behind playback — bridge with a short silence so the
+        // node keeps playing (rather than glitching/stopping) until the next
+        // chunk arrives.
+        if streamingStarted, !streamingFinalized, !userPaused, pendingBuffers == 0, engine != nil {
+            appendSilence(0.6)
+            return
+        }
         guard streamingFinalized, streamingStarted, pendingBuffers == 0 else { return }
         isPlaying = false
         streamingStarted = false

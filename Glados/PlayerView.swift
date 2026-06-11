@@ -125,6 +125,13 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func loadLibraryItem(_ item: LibraryItem) async {
+        // Already the active item (still generating or just paused) — resume in
+        // place rather than reloading or regenerating.
+        if item.id == currentLibraryItemID, status != .idle {
+            if !player.isPlaying { player.play() }
+            return
+        }
+        await LibraryManager.shared.markTouched(item.id)
         if let id = currentLibraryItemID {
             let t = player.currentTime
             await LibraryManager.shared.updateLastPlayedTime(id, time: t)
@@ -434,7 +441,9 @@ final class PlayerViewModel: ObservableObject {
         status = .cleaning
         let llmCleaned = await LLMCleaner.shared.clean(title: article.title, text: pronounced)
         exportMarkdown = buildMarkdown(title: article.title, body: llmCleaned)
-        let chunks = TextChunker.chunk(llmCleaned)
+        // Split into speak chunks + pauses (a long pause follows each section title).
+        let units = NarrationBuilder.units(from: llmCleaned)
+        let speakCount = units.filter { if case .speak = $0 { return true } else { return false } }.count
 
         // Estimate the TTS spend and let the user cancel before we make the call.
         guard await confirmCost(chars: llmCleaned.count) else { status = .idle; return }
@@ -448,33 +457,40 @@ final class PlayerViewModel: ObservableObject {
         var allPCM = Data()
         var cumulativeTime: TimeInterval = 0
         var built: [SentenceTimestamp] = []
+        var spoken = 0
 
-        status = .generating(0, chunks.count)
+        status = .generating(0, speakCount)
         let gen = UUID()
         generationToken = gen
         player.startStreaming()
 
-        for (i, chunk) in chunks.enumerated() {
-            // Aborted (stop pressed / replaced by a newer load)?
+        for unit in units {
             guard generationToken == gen else { return }
-            if case .generating = status { status = .generating(i + 1, chunks.count) }
-            built.append(SentenceTimestamp(text: chunk, startTime: cumulativeTime))
-            var chunkPCM = Data()
-            let stream = try await streamTTS(chunk)
-            for try await data in stream {
-                guard generationToken == gen else { return }
-                chunkPCM.append(data)
-                player.appendPCM(data)
-            }
-            CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
-            cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
-            allPCM.append(chunkPCM)
-            sentences = built  // Update transcript incrementally
+            switch unit {
+            case .pause(let seconds):
+                player.appendSilence(seconds)
+                allPCM.append(Data(count: Int(seconds * 24000) * 2))   // keep saved WAV in sync
+                cumulativeTime += seconds
+            case .speak(let chunk):
+                spoken += 1
+                if case .generating = status { status = .generating(spoken, speakCount) }
+                built.append(SentenceTimestamp(text: chunk, startTime: cumulativeTime))
+                var chunkPCM = Data()
+                let stream = try await streamTTS(chunk)
+                for try await data in stream {
+                    guard generationToken == gen else { return }
+                    chunkPCM.append(data)
+                    player.appendPCM(data)
+                }
+                CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
+                cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
+                allPCM.append(chunkPCM)
+                sentences = built  // Update transcript incrementally
 
-            // Switch to ready layout after first chunk so user gets immediate UI access
-            if i == 0 {
-                player.setNowPlaying(title: article.title)
-                status = .ready
+                if spoken == 1 {
+                    player.setNowPlaying(title: article.title)
+                    status = .ready
+                }
             }
         }
 
@@ -493,6 +509,53 @@ final class PlayerViewModel: ObservableObject {
 enum PlayerStatus: Equatable {
     case idle, fetching, cleaning, ready
     case generating(Int, Int)
+}
+
+// MARK: - Narration units (speak chunks + deliberate pauses)
+
+enum NarrationUnit {
+    case speak(String)
+    case pause(Double)
+}
+
+enum NarrationBuilder {
+    /// Long pause inserted after a section title.
+    static let sectionPause: Double = 1.2
+    private static let marker = "\u{1}§\u{1}"
+    private static let headers = [
+        "Abstract", "Summary", "Introduction", "Background",
+        "Materials and Methods", "Methods", "Results and Discussion", "Results",
+        "Discussion", "Conclusions", "Conclusion", "Significance",
+        "Acknowledgements", "Acknowledgments", "References"
+    ]
+
+    /// Turns article text into speak/pause units: each recognized section title
+    /// is spoken on its own and followed by a long pause.
+    static func units(from text: String) -> [NarrationUnit] {
+        let marked = insertSectionPauses(text)
+        var out: [NarrationUnit] = []
+        let parts = marked.components(separatedBy: marker)
+        for (i, part) in parts.enumerated() {
+            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            for chunk in TextChunker.chunk(trimmed) where !chunk.isEmpty {
+                out.append(.speak(chunk))
+            }
+            if i < parts.count - 1 { out.append(.pause(sectionPause)) }
+        }
+        return out
+    }
+
+    /// Inserts a pause marker after section-title lines (e.g. "Abstract").
+    private static func insertSectionPauses(_ text: String) -> String {
+        var result = text
+        for header in headers {
+            let pattern = "(?im)^[ \\t]*\(NSRegularExpression.escapedPattern(for: header))[ \\t]*:?[ \\t]*$"
+            guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(result.startIndex..., in: result)
+            result = re.stringByReplacingMatches(in: result, range: range, withTemplate: "\(header).\(marker)")
+        }
+        return result
+    }
 }
 
 struct CostPrompt: Identifiable {

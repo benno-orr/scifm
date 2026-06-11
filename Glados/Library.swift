@@ -49,6 +49,10 @@ struct LibraryItem: Codable, Identifiable {
 
     /// Whether the user explicitly marked this finished, independent of position.
     var markedFinished: Bool?
+    /// Last time the item was created/opened/progressed; drives 7-day eviction.
+    var lastTouched: Date?
+
+    var touchedDate: Date { lastTouched ?? dateAdded }
 
     /// Fraction listened, 0...1.
     var progressFraction: Double {
@@ -93,6 +97,9 @@ actor LibraryManager {
     private var metadataURL: URL { documentsURL.appendingPathComponent("library.json") }
     private var audioDir: URL { documentsURL.appendingPathComponent("audio") }
 
+    /// Cached audio is evicted this long after an item was last touched.
+    private let evictionInterval: TimeInterval = 7 * 24 * 3600
+
     func loadAll() -> [LibraryItem] {
         if !isLoaded {
             if let data = try? Data(contentsOf: metadataURL),
@@ -101,7 +108,27 @@ actor LibraryManager {
             }
             isLoaded = true
         }
+        pruneStale()
         return items
+    }
+
+    /// Removes items (audio + metadata) not touched within `evictionInterval`.
+    private func pruneStale() {
+        let cutoff = Date().addingTimeInterval(-evictionInterval)
+        let stale = items.filter { $0.touchedDate < cutoff }
+        guard !stale.isEmpty else { return }
+        for item in stale {
+            try? FileManager.default.removeItem(at: audioDir.appendingPathComponent(item.audioFileName))
+        }
+        items.removeAll { $0.touchedDate < cutoff }
+        persist()
+    }
+
+    /// Bumps an item's last-touched time (e.g. when opened) to defer eviction.
+    func markTouched(_ id: UUID) {
+        guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        items[idx].lastTouched = Date()
+        persist()
     }
 
     func save(title: String, sourceURL: String, wavData: Data,
@@ -116,7 +143,7 @@ actor LibraryManager {
                                dateAdded: Date(), duration: duration,
                                audioFileName: fileName, sentences: sentences,
                                lastPlayedTime: 0, kind: kind, panels: panels,
-                               markedFinished: false)
+                               markedFinished: false, lastTouched: Date())
         items.insert(item, at: 0)
         persist()
         return item
@@ -129,7 +156,8 @@ actor LibraryManager {
         let item = LibraryItem(id: id, title: title, sourceURL: sourceURL,
                                dateAdded: Date(), duration: 0,
                                audioFileName: "\(id.uuidString).wav", sentences: [],
-                               lastPlayedTime: 0, kind: kind, panels: nil, markedFinished: false)
+                               lastPlayedTime: 0, kind: kind, panels: nil,
+                               markedFinished: false, lastTouched: Date())
         items.insert(item, at: 0)
         persist()
         return item
@@ -143,6 +171,7 @@ actor LibraryManager {
         try? wavData.write(to: audioDir.appendingPathComponent(items[idx].audioFileName))
         items[idx].sentences = sentences
         items[idx].duration = duration
+        items[idx].lastTouched = Date()
         if let panels { items[idx].panels = panels }
         persist()
     }
@@ -156,6 +185,7 @@ actor LibraryManager {
         } else if items[idx].lastPlayedTime >= items[idx].duration * 0.97 {
             items[idx].lastPlayedTime = 0   // so it leaves the Read tab
         }
+        items[idx].lastTouched = Date()
         persist()
     }
 
@@ -170,6 +200,7 @@ actor LibraryManager {
     func updateLastPlayedTime(_ id: UUID, time: TimeInterval) {
         guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
         items[idx].lastPlayedTime = time
+        items[idx].lastTouched = Date()
         persist()
     }
 
