@@ -95,6 +95,9 @@ struct ArticleRow: View {
     let onReadFull: () -> Void
     let abstractText: () async -> String
     var onSeminarize: (() -> Void)? = nil
+    /// Papers layout: tapping the row reads the full doc, and the speaker +
+    /// seminarize actions are stacked vertically on the right (no doc button).
+    var stacked: Bool = false
 
     @ObservedObject private var abstractPlayer = AbstractPlayer.shared
     @State private var thumbnailURL: URL? = nil
@@ -104,14 +107,10 @@ struct ArticleRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Thumbnail
-            Button(action: onTap) {
-                ThumbnailView(url: thumbnailURL)
-            }
-            .buttonStyle(.plain)
+            Button(action: onTap) { ThumbnailView(url: thumbnailURL) }
+                .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 4) {
-                // Title
                 Button(action: onTap) {
                     Text(article.title)
                         .font(.subheadline).lineLimit(3)
@@ -119,63 +118,63 @@ struct ArticleRow: View {
                 }
                 .buttonStyle(.plain)
 
-                // Meta + action icons
                 HStack(spacing: 6) {
                     Text(article.source).fontWeight(.semibold).foregroundColor(.accentColor)
                     Text("·")
                     Text(article.label)
                     if let date = article.publishedDate {
-                        Text("·")
-                        Text(date, style: .relative)
-                        Text("ago")
+                        Text("·"); Text(date, style: .relative); Text("ago")
                     }
-                    Spacer()
-                    // Speaker icon — play/stop abstract
-                    Button {
-                        Task {
-                            if isThisPlaying { abstractPlayer.stop(); return }
-                            let text = await abstractText()
-                            guard !text.isEmpty else { return }
-                            abstractPlayer.toggle(id: article.id, text: text)
-                        }
-                    } label: {
-                        Group {
-                            if isThisLoading {
-                                ProgressView().scaleEffect(0.7)
-                            } else if isThisPlaying {
-                                Image(systemName: "speaker.wave.2.fill")
-                            } else {
-                                Image(systemName: "speaker.wave.2")
-                            }
-                        }
-                        .foregroundColor(.accentColor)
-                        .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.plain)
-
-                    // Full article
-                    Button(action: onReadFull) {
-                        Image(systemName: "doc.text")
-                            .foregroundColor(.secondary)
-                            .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.plain)
-
-                    // Seminarize (figure-by-figure)
-                    if let onSeminarize {
-                        Button(action: onSeminarize) {
-                            Image(systemName: "rectangle.3.group")
-                                .foregroundColor(.secondary)
-                                .frame(width: 24, height: 24)
+                    if !stacked {
+                        Spacer()
+                        speakerButton
+                        Button(action: onReadFull) {
+                            Image(systemName: "doc.text").foregroundColor(.secondary).frame(width: 24, height: 24)
                         }
                         .buttonStyle(.plain)
+                        if let onSeminarize { seminarizeButton(onSeminarize) }
                     }
                 }
                 .font(.caption2).foregroundColor(.secondary)
             }
+
+            if stacked {
+                Spacer(minLength: 4)
+                VStack(spacing: 12) {
+                    speakerButton
+                    if let onSeminarize { seminarizeButton(onSeminarize) }
+                }
+            }
         }
         .padding(.vertical, 6)
         .task { if thumbnailURL == nil { thumbnailURL = await FeedManager.shared.fetchThumbnail(for: article) } }
+    }
+
+    private var speakerButton: some View {
+        Button {
+            Task {
+                if isThisPlaying { abstractPlayer.stop(); return }
+                let text = await abstractText()
+                guard !text.isEmpty else { return }
+                abstractPlayer.toggle(id: article.id, text: text)
+            }
+        } label: {
+            Group {
+                if isThisLoading { ProgressView().scaleEffect(0.7) }
+                else if isThisPlaying { Image(systemName: "speaker.wave.2.fill") }
+                else { Image(systemName: "speaker.wave.2") }
+            }
+            .foregroundColor(.accentColor)
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func seminarizeButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "rectangle.3.group").foregroundColor(.secondary).frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
     }
 }
 

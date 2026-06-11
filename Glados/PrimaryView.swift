@@ -77,10 +77,11 @@ struct PrimaryView: View {
             List(feed) { article in
                 ArticleRow(
                     article: article,
-                    onTap: { selectedArticle = article },
+                    onTap: { viewModel.load(url: article.url, kind: .primary); selectedTab = 0 },
                     onReadFull: { viewModel.load(url: article.url, kind: .primary); selectedTab = 0 },
                     abstractText: { await FeedManager.shared.readingText(for: article) },
-                    onSeminarize: { viewModel.load(url: article.url, kind: .seminar); selectedTab = 0 }
+                    onSeminarize: { viewModel.load(url: article.url, kind: .seminar); selectedTab = 0 },
+                    stacked: true
                 )
             }
             .listStyle(.plain)
@@ -104,7 +105,8 @@ struct PrimaryView: View {
                 SearchResultRow(
                     result: result,
                     onReadFull: { viewModel.load(url: result.articleURL, kind: .primary); selectedTab = 0 },
-                    onSeminarize: { viewModel.load(url: result.articleURL, kind: .seminar); selectedTab = 0 }
+                    onSeminarize: { viewModel.load(url: result.articleURL, kind: .seminar); selectedTab = 0 },
+                    stacked: true
                 )
             }
             .listStyle(.plain)

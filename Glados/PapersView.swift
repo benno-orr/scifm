@@ -79,6 +79,9 @@ struct SearchResultRow: View {
     let result: PaperSearchResult
     let onReadFull: () -> Void
     var onSeminarize: (() -> Void)? = nil
+    /// Papers layout: tapping the row reads the full doc; speaker + seminarize
+    /// stacked vertically on the right (no doc button).
+    var stacked: Bool = false
 
     @ObservedObject private var abstractPlayer = AbstractPlayer.shared
     @State private var thumbnailURL: URL? = nil
@@ -88,11 +91,15 @@ struct SearchResultRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            ThumbnailView(url: thumbnailURL)
+            Button(action: onReadFull) { ThumbnailView(url: thumbnailURL) }
+                .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 3) {
-                Text(result.title)
-                    .font(.subheadline).lineLimit(3)
-                    .foregroundColor(.primary).multilineTextAlignment(.leading)
+                Button(action: onReadFull) {
+                    Text(result.title)
+                        .font(.subheadline).lineLimit(3)
+                        .foregroundColor(.primary).multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
                 if !result.authors.isEmpty {
                     Text(result.authors).font(.caption).foregroundColor(.secondary).lineLimit(1)
                 }
@@ -101,45 +108,50 @@ struct SearchResultRow: View {
                         Text(result.journal).fontWeight(.semibold).foregroundColor(.accentColor).lineLimit(1)
                     }
                     if !result.year.isEmpty { Text("·"); Text(result.year) }
-                    Spacer()
-                    if !result.abstract.isEmpty {
-                        Button {
-                            abstractPlayer.toggle(id: result.id, text: result.abstract)
-                        } label: {
-                            Group {
-                                if isThisLoading {
-                                    ProgressView().scaleEffect(0.7)
-                                } else if isThisPlaying {
-                                    Image(systemName: "speaker.wave.2.fill")
-                                } else {
-                                    Image(systemName: "speaker.wave.2")
-                                }
-                            }
-                            .foregroundColor(.accentColor)
-                            .frame(width: 24, height: 24)
+                    if !stacked {
+                        Spacer()
+                        if !result.abstract.isEmpty { speakerButton }
+                        Button(action: onReadFull) {
+                            Image(systemName: "doc.text").foregroundColor(.secondary).frame(width: 24, height: 24)
                         }
                         .buttonStyle(.plain)
-                    }
-                    Button(action: onReadFull) {
-                        Image(systemName: "doc.text")
-                            .foregroundColor(.secondary)
-                            .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.plain)
-
-                    if let onSeminarize {
-                        Button(action: onSeminarize) {
-                            Image(systemName: "rectangle.3.group")
-                                .foregroundColor(.secondary)
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.plain)
+                        if let onSeminarize { seminarizeButton(onSeminarize) }
                     }
                 }
                 .font(.caption2).foregroundColor(.secondary)
             }
+
+            if stacked {
+                Spacer(minLength: 4)
+                VStack(spacing: 12) {
+                    if !result.abstract.isEmpty { speakerButton }
+                    if let onSeminarize { seminarizeButton(onSeminarize) }
+                }
+            }
         }
         .padding(.vertical, 6)
         .task { if thumbnailURL == nil { thumbnailURL = await FeedManager.shared.fetchThumbnail(for: result.articleURL) } }
+    }
+
+    private var speakerButton: some View {
+        Button {
+            abstractPlayer.toggle(id: result.id, text: result.abstract)
+        } label: {
+            Group {
+                if isThisLoading { ProgressView().scaleEffect(0.7) }
+                else if isThisPlaying { Image(systemName: "speaker.wave.2.fill") }
+                else { Image(systemName: "speaker.wave.2") }
+            }
+            .foregroundColor(.accentColor)
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func seminarizeButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "rectangle.3.group").foregroundColor(.secondary).frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
     }
 }
