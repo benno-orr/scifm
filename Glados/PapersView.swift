@@ -78,6 +78,7 @@ struct PapersView: View {
 struct SearchResultRow: View {
     let result: PaperSearchResult
     let onReadFull: () -> Void
+    var onSeminarize: (() -> Void)? = nil
 
     @ObservedObject private var abstractPlayer = AbstractPlayer.shared
     @State private var thumbnailURL: URL? = nil
@@ -125,6 +126,15 @@ struct SearchResultRow: View {
                             .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
+
+                    if let onSeminarize {
+                        Button(action: onSeminarize) {
+                            Image(systemName: "rectangle.3.group")
+                                .foregroundColor(.secondary)
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .font(.caption2).foregroundColor(.secondary)
             }

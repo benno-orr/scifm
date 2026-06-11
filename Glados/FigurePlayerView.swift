@@ -124,6 +124,14 @@ struct FigurePlayerView: View {
                     .background(Color.accentColor.opacity(0.12))
                     .clipShape(Circle())
             }
+            Button { viewModel.skipToNextPanel() } label: {
+                Image(systemName: "forward.end.fill")
+                    .font(.system(size: 15))
+                    .frame(width: 36, height: 36)
+                    .background(Color.accentColor.opacity(0.12))
+                    .clipShape(Circle())
+            }
+            .disabled(viewModel.currentPanelIndex + 1 >= viewModel.panelTimestamps.count)
             VStack(spacing: 2) {
                 Slider(value: $sliderValue, in: 0...1) { editing in
                     isDragging = editing

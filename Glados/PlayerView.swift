@@ -83,6 +83,7 @@ final class PlayerViewModel: ObservableObject {
         pendingURL = url
         currentSourceURL = url.absoluteString
         currentKind = kind
+        mode = (kind == .seminar) ? .figure : .narration
         if mode == .figure {
             Task { await loadFigures(url: url) }
         } else {
@@ -130,6 +131,7 @@ final class PlayerViewModel: ObservableObject {
         }
         generationToken = UUID()   // abort any in-flight generation
         player.stop()
+        mode = .narration   // saved items are narration audio
         sentences = []
         currentSentenceIndex = 0
         status = .fetching
@@ -255,6 +257,14 @@ final class PlayerViewModel: ObservableObject {
             if ts.startTime <= time { idx = i } else { break }
         }
         if idx != currentPanelIndex { currentPanelIndex = idx }
+    }
+
+    /// Seminarize: jump to the next figure panel (skip button).
+    func skipToNextPanel() {
+        let next = currentPanelIndex + 1
+        guard next < panelTimestamps.count else { return }
+        player.seekAbsolute(to: panelTimestamps[next].startTime)
+        currentPanelIndex = next
     }
 
     func updateCurrentSentence(at time: TimeInterval) {
@@ -665,63 +675,68 @@ struct PlayerView: View {
 
     private var loadingLayout: some View {
         NavigationView {
-            VStack(spacing: 24) {
-                Spacer()
-                statusIcon.frame(height: 80)
-
-                if !viewModel.articleTitle.isEmpty {
-                    Text(viewModel.articleTitle)
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-
-                statusLabel
-
-                if let error = viewModel.errorMessage {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-
-                    if viewModel.pendingURL != nil {
-                        Button {
-                            viewModel.showWebReader = true
-                        } label: {
-                            Label("Open in browser", systemImage: "safari")
-                                .font(.subheadline)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 10)
-                                .background(Color.accentColor.opacity(0.12))
-                                .cornerRadius(10)
-                        }
-                        .padding(.top, 4)
-                    }
-                }
-
-                Spacer()
-
+            Group {
                 if viewModel.status == .idle {
-                    costBox
-
-                    Picker("Mode", selection: $viewModel.mode) {
-                        Text("Narration").tag(AppMode.narration)
-                        Text("Figures").tag(AppMode.figure)
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-
-                    pasteURLField
-                    Spacer()
+                    libraryHome
+                } else {
+                    loadingProgress
                 }
             }
-            .navigationTitle("sciFM")
+            .charcoalBackdrop()
+            .navigationTitle(viewModel.status == .idle ? "Library" : "sciFM")
             .navigationBarItems(trailing:
                 Button { viewModel.showAPIKeySetup = true } label: {
                     Image(systemName: "key")
                 }
             )
+        }
+    }
+
+    // Idle: the home / Library tab — spend box, paste field, Reading/Read list.
+    private var libraryHome: some View {
+        VStack(spacing: 12) {
+            costBox.padding(.top, 8)
+            pasteURLField
+            LibraryListView()
+        }
+    }
+
+    private var loadingProgress: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            statusIcon.frame(height: 80)
+
+            if !viewModel.articleTitle.isEmpty {
+                Text(viewModel.articleTitle)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            statusLabel
+
+            if let error = viewModel.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                if viewModel.pendingURL != nil {
+                    Button {
+                        viewModel.showWebReader = true
+                    } label: {
+                        Label("Open in browser", systemImage: "safari")
+                            .font(.subheadline)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.accentColor.opacity(0.12))
+                            .cornerRadius(10)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            Spacer()
         }
     }
 

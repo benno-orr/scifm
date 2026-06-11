@@ -22,13 +22,15 @@ struct DiscoverView: View {
                             article: article,
                             onTap: { selectedArticle = article },
                             onReadFull: { viewModel.load(url: article.url, kind: .editorial); selectedTab = 0 },
-                            abstractText: { await resolveAbstract(article) }
+                            abstractText: { await resolveAbstract(article) },
+                            onSeminarize: { viewModel.load(url: article.url, kind: .seminar); selectedTab = 0 }
                         )
                     }
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("Digest")
+            .charcoalBackdrop()
+            .navigationTitle("Editorials")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if isLoading {
@@ -93,6 +95,7 @@ struct ArticleRow: View {
     let onTap: () -> Void
     let onReadFull: () -> Void
     let abstractText: () async -> String
+    var onSeminarize: (() -> Void)? = nil
 
     @ObservedObject private var abstractPlayer = AbstractPlayer.shared
     @State private var thumbnailURL: URL? = nil
@@ -158,6 +161,16 @@ struct ArticleRow: View {
                             .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
+
+                    // Seminarize (figure-by-figure)
+                    if let onSeminarize {
+                        Button(action: onSeminarize) {
+                            Image(systemName: "rectangle.3.group")
+                                .foregroundColor(.secondary)
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .font(.caption2).foregroundColor(.secondary)
             }
@@ -255,5 +268,32 @@ struct ArticleDetailSheet: View {
         isFetching = true
         abstract = await FeedManager.shared.fetchAbstract(for: article)
         isFetching = false
+    }
+}
+
+// MARK: - Charcoal theme
+
+extension View {
+    /// Charcoal gradient backdrop with a transparent scroll background, for the
+    /// app's dark theme. No-op on non-scrolling views beyond the background.
+    func charcoalBackdrop() -> some View { modifier(CharcoalBackdrop()) }
+}
+
+private struct CharcoalBackdrop: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background(
+                ZStack {
+                    LinearGradient(
+                        colors: [Color(red: 0.11, green: 0.11, blue: 0.12),
+                                 Color(red: 0.04, green: 0.04, blue: 0.05)],
+                        startPoint: .top, endPoint: .bottom)
+                    RadialGradient(
+                        colors: [Color.white.opacity(0.05), .clear],
+                        center: .top, startRadius: 0, endRadius: 520)
+                }
+                .ignoresSafeArea()
+            )
     }
 }

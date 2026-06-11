@@ -139,7 +139,13 @@ actor FeedManager {
     /// of recent papers. Returns newest-first FeedArticles with the briefing text
     /// as the summary (read directly, no DOI/abstract round-trip needed).
     func scrapeNatureBriefings() async -> [FeedArticle] {
-        guard let url = URL(string: "https://www.nature.com/nature/articles?type=research-briefing") else { return [] }
+        await scrapeNatureList(type: "research-briefing", linkContains: "/articles/d41586-", label: "Research Briefing")
+    }
+
+    /// Scrapes a Nature article listing (?type=…). `linkContains` filters to the
+    /// right DOI family (d41586 editorial, s41586 research).
+    private func scrapeNatureList(type: String, linkContains: String, label: String) async -> [FeedArticle] {
+        guard let url = URL(string: "https://www.nature.com/nature/articles?type=\(type)") else { return [] }
         var request = URLRequest(url: url)
         request.setValue(Self.iPhoneUA, forHTTPHeaderField: "User-Agent")
         guard let (data, _) = try? await URLSession.shared.data(for: request),
@@ -148,9 +154,9 @@ actor FeedManager {
 
         var out: [FeedArticle] = []
         var seen = Set<String>()
-        // Each article card is an <article> ... block on the listing page.
+        let linkPattern = "href=\"(\(NSRegularExpression.escapedPattern(for: linkContains))[^\"]+)\""
         for block in html.components(separatedBy: "<article").dropFirst() {
-            guard let link = Self.firstGroup(#"href="(/articles/d41586-[^"]+)""#, block),
+            guard let link = Self.firstGroup(linkPattern, block),
                   !seen.contains(link),
                   let rawTitle = Self.firstGroup(#"name headline">\s*<a\b[^>]*>(.*?)</a>"#, block)
             else { continue }
@@ -166,11 +172,42 @@ actor FeedManager {
 
             out.append(FeedArticle(
                 id: link, title: title, summary: summary, url: articleURL,
-                source: "Nature", label: "Research Briefing",
+                source: "Nature", label: label,
                 publishedDate: parseFeedDate(dateStr), doi: nil
             ))
         }
         return out
+    }
+
+    // MARK: - Primary research feed
+
+    private let primarySources: [FeedSource] = [
+        FeedSource(
+            name: "Science", label: "Research",
+            rssURL: URL(string: "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science")!,
+            urlMustContain: nil,
+            dcTypesAllowed: ["Research Article", "Report"]
+        ),
+        FeedSource(
+            name: "Cell", label: "Article",
+            rssURL: URL(string: "https://www.cell.com/cell/rss")!,
+            urlMustContain: nil, dcTypesAllowed: nil
+        ),
+    ]
+
+    /// Recent primary research papers (Nature/Science/Cell), newest first.
+    func fetchPrimary() async -> [FeedArticle] {
+        await withTaskGroup(of: [FeedArticle].self) { group in
+            group.addTask {
+                await self.scrapeNatureList(type: "article", linkContains: "/articles/s41586-", label: "Research Article")
+            }
+            for source in primarySources {
+                group.addTask { await self.fetch(source: source) }
+            }
+            var all: [FeedArticle] = []
+            for await articles in group { all.append(contentsOf: articles) }
+            return all.sorted { ($0.publishedDate ?? .distantPast) > ($1.publishedDate ?? .distantPast) }
+        }
     }
 
     /// Best text to narrate for a feed article:

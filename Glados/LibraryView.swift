@@ -1,8 +1,9 @@
 import SwiftUI
 
-struct LibraryView: View {
+/// The Reading/Read list. Embedded in the Library (home) tab beneath the
+/// paste-URL field and cost box; tapping an item starts playback in place.
+struct LibraryListView: View {
     @EnvironmentObject var viewModel: PlayerViewModel
-    @Binding var selectedTab: Int
     @State private var items: [LibraryItem] = []
     @State private var filter: Filter = .reading
 
@@ -13,28 +14,25 @@ struct LibraryView: View {
     private var shown: [LibraryItem]   { filter == .reading ? reading : read }
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                Picker("", selection: $filter) {
-                    ForEach(Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
+        VStack(spacing: 0) {
+            Picker("", selection: $filter) {
+                ForEach(Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.bottom, 8)
 
-                Group {
-                    if shown.isEmpty {
-                        emptyState
-                    } else {
-                        list
-                    }
+            Group {
+                if shown.isEmpty {
+                    emptyState
+                } else {
+                    list
                 }
             }
-            .navigationTitle("Library")
-            .onAppear { Task { items = await LibraryManager.shared.loadAll() } }
-            .onReceive(NotificationCenter.default.publisher(for: .libraryDidChange)) { _ in
-                Task { items = await LibraryManager.shared.loadAll() }
-            }
+        }
+        .onAppear { Task { items = await LibraryManager.shared.loadAll() } }
+        .onReceive(NotificationCenter.default.publisher(for: .libraryDidChange)) { _ in
+            Task { items = await LibraryManager.shared.loadAll() }
         }
     }
 
@@ -60,10 +58,7 @@ struct LibraryView: View {
         List {
             ForEach(shown) { item in
                 Button {
-                    Task {
-                        await viewModel.loadLibraryItem(item)
-                        selectedTab = 0
-                    }
+                    Task { await viewModel.loadLibraryItem(item) }
                 } label: {
                     row(item)
                 }

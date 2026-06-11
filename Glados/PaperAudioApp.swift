@@ -14,26 +14,27 @@ struct SciFMApp: App {
         WindowGroup {
             TabView(selection: $selectedTab) {
                 PlayerView(incomingURL: $incomingURL)
-                    .tabItem { Label("Player", systemImage: "play.circle") }
-                    .tag(0)
-
-                LibraryView(selectedTab: $selectedTab)
                     .tabItem { Label("Library", systemImage: "books.vertical") }
-                    .tag(1)
-
-                DiscoverView(selectedTab: $selectedTab)
-                    .tabItem { Label("Digest", systemImage: "newspaper") }
-                    .tag(2)
+                    .tag(0)
 
                 ReviewsView(selectedTab: $selectedTab)
                     .tabItem { Label("Reviews", systemImage: "text.book.closed") }
+                    .tag(1)
+
+                DiscoverView(selectedTab: $selectedTab)
+                    .tabItem { Label("Editorials", systemImage: "newspaper") }
+                    .tag(2)
+
+                PrimaryView(selectedTab: $selectedTab)
+                    .tabItem { Label("Primary", systemImage: "doc.text.magnifyingglass") }
                     .tag(3)
 
-                PapersView(selectedTab: $selectedTab)
-                    .tabItem { Label("Papers", systemImage: "doc.text.magnifyingglass") }
+                SeminarizeView(selectedTab: $selectedTab)
+                    .tabItem { Label("Seminarize", systemImage: "rectangle.3.group") }
                     .tag(4)
             }
             .environmentObject(playerViewModel)
+            .preferredColorScheme(.dark)
             .onOpenURL { url in handleDeepLink(url) }
             .onAppear { checkPendingURL() }
         }

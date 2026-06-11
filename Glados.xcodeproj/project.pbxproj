@@ -38,6 +38,8 @@
 		F35CC97F8FABCD895EEAF374 /* ArticleProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28E8B079180D78FE93821C7C /* ArticleProcessor.swift */; };
 		161F88A84BFB4FE5B3AD4908 /* ReviewsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAACE3E8F41E47FCA9CA90F6 /* ReviewsView.swift */; };
 		984D1C7BEB594830A56804F4 /* Cost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19E28E4573904E938E894952 /* Cost.swift */; };
+		11543E08D7B7490DAC5541D1 /* PrimaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C91B0EB9E5BA4DA6BC16445F /* PrimaryView.swift */; };
+		95B47AC15614465B9D1B79F3 /* SeminarizeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56C2C2BA9EF847C3963FC564 /* SeminarizeView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -109,6 +111,8 @@
 		F373038D1D87F05F90F46F44 /* DeepgramTTS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepgramTTS.swift; sourceTree = "<group>"; };
 		FAACE3E8F41E47FCA9CA90F6 /* ReviewsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewsView.swift; sourceTree = "<group>"; };
 		19E28E4573904E938E894952 /* Cost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cost.swift; sourceTree = "<group>"; };
+		C91B0EB9E5BA4DA6BC16445F /* PrimaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryView.swift; sourceTree = "<group>"; };
+		56C2C2BA9EF847C3963FC564 /* SeminarizeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeminarizeView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -191,8 +195,10 @@
 				22DDEEB08ACABA6882CD4F23 /* OpenAITTS.swift */,
 				265D0A1BFA39D457F67E9B88 /* PaperAudioApp.swift */,
 				CCCDDB1640C92C080ED0B486 /* PapersView.swift */,
+				C91B0EB9E5BA4DA6BC16445F /* PrimaryView.swift */,
 				E08E392DB3F95E1D1E0DA508 /* PlayerView.swift */,
 				FAACE3E8F41E47FCA9CA90F6 /* ReviewsView.swift */,
+				56C2C2BA9EF847C3963FC564 /* SeminarizeView.swift */,
 				13DC63B50D86D6B3393C8604 /* ScientificPronunciation.swift */,
 				898B204093E3372A88E4C26F /* WebReaderView.swift */,
 			);
@@ -342,6 +348,8 @@
 				ABC88F8A149DC76FF1D40431 /* AppSettings.swift in Sources */,
 				F35CC97F8FABCD895EEAF374 /* ArticleProcessor.swift in Sources */,
 				984D1C7BEB594830A56804F4 /* Cost.swift in Sources */,
+				11543E08D7B7490DAC5541D1 /* PrimaryView.swift in Sources */,
+				95B47AC15614465B9D1B79F3 /* SeminarizeView.swift in Sources */,
 				566DA51F4988E6A43EF82665 /* AudioStreamPlayer.swift in Sources */,
 				A9B297A80CE9F470AFD0B472 /* DeepgramTTS.swift in Sources */,
 				55E580FFA9DE14557650A6EF /* DiscoverFeed.swift in Sources */,
