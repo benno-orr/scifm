@@ -39,8 +39,8 @@ struct FigurePlayerView: View {
             Button { viewModel.showAPIKeySetup = true } label: {
                 Image(systemName: "gearshape").font(.caption).foregroundColor(.secondary)
             }
-            Button { viewModel.stop() } label: {
-                Image(systemName: "xmark").font(.caption).foregroundColor(.secondary)
+            Button { viewModel.dismissSeminar() } label: {
+                Image(systemName: "chevron.down").font(.caption).foregroundColor(.secondary)
             }
         }
         .padding(.horizontal, 12)
@@ -58,7 +58,7 @@ struct FigurePlayerView: View {
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
             Spacer()
-            Text(viewModel.sectionProgressLabel)
+            Text(viewModel.stepProgressLabel)
                 .font(.caption2.monospacedDigit())
                 .foregroundColor(.secondary)
         }
@@ -149,14 +149,14 @@ struct FigurePlayerView: View {
 
     private var controls: some View {
         HStack(spacing: 10) {
-            Button { viewModel.skipToPreviousSection() } label: {
-                Image(systemName: "backward.end.fill")
-                    .font(.system(size: 15))
+            Button { viewModel.stepBackward() } label: {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 16, weight: .semibold))
                     .frame(width: 36, height: 36)
                     .background(Color.accentColor.opacity(0.12))
                     .clipShape(Circle())
             }
-            .disabled(!viewModel.player.canSeek)
+            .disabled(!viewModel.canStepBackward)
 
             Button { viewModel.player.togglePlayPause() } label: {
                 Image(systemName: viewModel.player.isPlaying ? "pause.fill" : "play.fill")
@@ -166,14 +166,14 @@ struct FigurePlayerView: View {
                     .clipShape(Circle())
             }
 
-            Button { viewModel.skipToNextSection() } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 15))
+            Button { viewModel.stepForward() } label: {
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 16, weight: .semibold))
                     .frame(width: 36, height: 36)
                     .background(Color.accentColor.opacity(0.12))
                     .clipShape(Circle())
             }
-            .disabled(!viewModel.player.canSeek)
+            .disabled(!viewModel.canStepForward)
 
             VStack(spacing: 2) {
                 Slider(value: $sliderValue, in: 0...1) { editing in
@@ -194,6 +194,75 @@ struct FigurePlayerView: View {
     }
 }
 
+// MARK: - Full-screen seminar cover
+
+/// Hosts the seminar full-screen over the whole app: the generation progress
+/// while it loads, then the figure player once it's ready.
+struct SeminarCover: View {
+    @EnvironmentObject var viewModel: PlayerViewModel
+
+    var body: some View {
+        ZStack {
+            if case .ready = viewModel.status, viewModel.mode == .figure {
+                FigurePlayerView()
+            } else {
+                loading
+            }
+        }
+        .charcoalBackdrop()
+        .sheet(isPresented: $viewModel.showAPIKeySetup) {
+            APIKeySetupView(isPresented: $viewModel.showAPIKeySetup)
+        }
+        .sheet(isPresented: $viewModel.showWebReader) {
+            if let url = viewModel.pendingURL {
+                WebReaderSheet(url: url) { title, body in
+                    viewModel.processWebContent(title: title, bodyText: body)
+                }
+            }
+        }
+    }
+
+    private var loading: some View {
+        VStack(spacing: 18) {
+            HStack {
+                Spacer()
+                Button { viewModel.dismissSeminar() } label: {
+                    Image(systemName: "xmark").font(.title3).foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
+            Spacer()
+
+            if viewModel.status == .failed {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 50)).foregroundColor(.orange)
+                if let e = viewModel.errorMessage {
+                    Text(e).font(.callout).foregroundColor(.red)
+                        .multilineTextAlignment(.center).padding(.horizontal, 32)
+                }
+                if viewModel.pendingURL != nil {
+                    Button { viewModel.showWebReader = true } label: {
+                        Label("Read full text in browser", systemImage: "safari")
+                            .font(.subheadline).padding(.horizontal, 20).padding(.vertical, 10)
+                            .background(Color.accentColor.opacity(0.12)).cornerRadius(10)
+                    }
+                }
+            } else {
+                ProgressView().scaleEffect(1.6)
+                Text(viewModel.seminarStatusText).font(.subheadline).foregroundColor(.secondary)
+            }
+
+            if !viewModel.articleTitle.isEmpty {
+                Text(viewModel.articleTitle).font(.headline)
+                    .multilineTextAlignment(.center).padding(.horizontal, 24)
+            }
+
+            Spacer()
+        }
+    }
+}
+
 // MARK: - Auto-cropping figure image
 
 /// Loads a figure image (cached) and crops it to the region around the current
@@ -203,21 +272,34 @@ struct CroppedFigureImage: View {
     let url: URL
     let panelLabel: String
 
-    @State private var display: UIImage?
+    @State private var full: UIImage?
+    @State private var cropped: UIImage?
+    @State private var failed = false
 
     var body: some View {
         Group {
-            if let display {
-                Image(uiImage: display).resizable().scaledToFit()
+            if let img = cropped ?? full {
+                Image(uiImage: img).resizable().scaledToFit()
+            } else if failed {
+                Color(.secondarySystemBackground)
+                    .overlay(Image(systemName: "photo").font(.system(size: 40)).foregroundColor(.secondary))
             } else {
                 Color(.secondarySystemBackground).overlay(ProgressView())
             }
         }
+        // Load + show the whole figure as soon as it arrives (don't wait on OCR).
+        .task(id: url) {
+            full = await FigureImageCache.shared.image(for: url)
+            failed = (full == nil)
+        }
+        // Then refine to the cropped panel in the background.
         .task(id: "\(url.absoluteString)#\(panelLabel)") {
-            guard let full = await FigureImageCache.shared.image(for: url) else { display = nil; return }
-            if panelLabel.isEmpty { display = full; return }
-            let labels = await FigureImageCache.shared.labelBoxes(for: url, image: full)
-            display = FigurePanelCropper.crop(full, label: panelLabel, labelBoxes: labels)
+            cropped = nil
+            guard !panelLabel.isEmpty, let f = await FigureImageCache.shared.image(for: url) else { return }
+            let labels = await FigureImageCache.shared.labelBoxes(for: url, image: f)
+            let result = FigurePanelCropper.crop(f, label: panelLabel, labelBoxes: labels)
+            // Only show a crop if it actually narrowed the figure.
+            cropped = result.size == f.size ? nil : result
         }
     }
 }

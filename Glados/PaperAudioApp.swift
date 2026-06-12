@@ -31,6 +31,11 @@ struct SciFMApp: App {
             }
             .environmentObject(playerViewModel)
             .preferredColorScheme(.dark)
+            .fullScreenCover(isPresented: $playerViewModel.showSeminar) {
+                SeminarCover()
+                    .environmentObject(playerViewModel)
+                    .preferredColorScheme(.dark)
+            }
             .onOpenURL { url in handleDeepLink(url) }
             .onAppear { checkPendingURL() }
         }

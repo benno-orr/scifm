@@ -309,8 +309,10 @@ actor ArticleProcessor {
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
         let firstFig = allPanels.first?.figureNumber ?? 1
         let intro = introBeforeFirstFigure(in: raw.bodyText, figureNumber: firstFig)
-        let textSections = await textSectionPanels(abstract: raw.abstract, intro: intro)
-        return ProcessedFigures(title: raw.title, panels: textSections + allPanels)
+        var timeline: [FigurePanel] = []
+        if let s = await textSection(title: "Introduction", text: intro) { timeline.append(s) }
+        timeline.append(contentsOf: allPanels)
+        return ProcessedFigures(title: raw.title, panels: timeline)
     }
 
     private func figureImageURL(href: String, pmcid: String) -> URL? {
@@ -373,10 +375,16 @@ actor ArticleProcessor {
         }
 
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
+        // Abstract is extracted only to exclude it from the intro (we don't
+        // narrate it as a section). Timeline = Introduction → figures → Discussion.
         let abstract = abstractFromHTML(html)
         let intro = introParagraphsFromHTML(html, excludingAbstract: abstract)
-        let textSections = await textSectionPanels(abstract: abstract, intro: intro)
-        return ProcessedFigures(title: title, panels: textSections + allPanels)
+        let discussion = discussionParagraphsFromHTML(html)
+        var timeline: [FigurePanel] = []
+        if let s = await textSection(title: "Introduction", text: intro) { timeline.append(s) }
+        timeline.append(contentsOf: allPanels)
+        if let s = await textSection(title: "Discussion", text: discussion) { timeline.append(s) }
+        return ProcessedFigures(title: title, panels: timeline)
     }
 
     /// Introduction for the HTML path: substantial <p> paragraphs before the first
@@ -410,21 +418,52 @@ actor ArticleProcessor {
         return paras.joined(separator: " ")
     }
 
-    /// Builds the leading text sections (Abstract, Introduction) as panels with
-    /// `figureNumber == 0` and no image, cleaned for narration.
-    private func textSectionPanels(abstract: String, intro: String) async -> [FigurePanel] {
-        var out: [FigurePanel] = []
-        let a = await cleanText(abstract).trimmingCharacters(in: .whitespacesAndNewlines)
-        if a.count > 40 {
-            out.append(FigurePanel(figureNumber: 0, figureTitle: "Abstract", label: "",
-                                   legendText: a, textReferences: [], imageURL: nil))
+    /// Builds a text section (Introduction, Discussion) as a panel with
+    /// `figureNumber == 0` and no image, cleaned for narration. Returns nil when
+    /// there isn't enough text to be worth a section.
+    private func textSection(title: String, text: String) async -> FigurePanel? {
+        let t = await cleanText(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count > 80 else { return nil }
+        return FigurePanel(figureNumber: 0, figureTitle: title, label: "",
+                           legendText: t, textReferences: [], imageURL: nil)
+    }
+
+    /// Discussion for the HTML path: substantial <p> paragraphs after the last
+    /// <figure> and before the Methods/References/back-matter, minus boilerplate.
+    private func discussionParagraphsFromHTML(_ html: String) -> String {
+        guard let lastFig = html.range(of: "</figure>", options: [.caseInsensitive, .backwards]) else { return "" }
+        var tail = String(html[lastFig.upperBound...])
+        // Cut at the first back-matter heading.
+        let markers = ["Methods", "Data availability", "Code availability", "References",
+                       "Acknowledgements", "Acknowledgments", "Author information",
+                       "Supplementary information", "Ethics declarations"]
+        var cut = tail.endIndex
+        for m in markers {
+            if let r = tail.range(of: ">\(m)<", options: .caseInsensitive), r.lowerBound < cut {
+                cut = r.lowerBound
+            }
         }
-        let i = await cleanText(intro).trimmingCharacters(in: .whitespacesAndNewlines)
-        if i.count > 80 {
-            out.append(FigurePanel(figureNumber: 0, figureTitle: "Introduction", label: "",
-                                   legendText: i, textReferences: [], imageURL: nil))
+        tail = String(tail[..<cut])
+        let boilerplate = ["thank you for visiting", "browser version", "view all journals",
+                           "log in", "sign up for alerts", "explore content", "publish with us",
+                           "rss feed", "similar content", "download pdf", "cookie", "google scholar",
+                           "advertisement", "about the journal", "accept all", "we use cookies",
+                           "reprints and permissions", "cite this article"]
+        guard let pRe = try? NSRegularExpression(pattern: #"<p[^>]*>([\s\S]*?)</p>"#,
+                                                 options: .caseInsensitive) else { return "" }
+        var paras: [String] = []
+        for m in pRe.matches(in: tail, range: NSRange(tail.startIndex..., in: tail)) {
+            guard let r = Range(m.range(at: 1), in: tail) else { continue }
+            let p = htmlToPlainText(String(tail[r]))
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard p.count > 150 else { continue }
+            let low = p.lowercased()
+            if boilerplate.contains(where: { low.contains($0) }) { continue }
+            paras.append(p)
+            if paras.joined(separator: " ").count > 4000 { break }
         }
-        return out
+        return paras.joined(separator: " ")
     }
 
     /// Body sentences from the start up to (not including) the first reference to

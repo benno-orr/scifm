@@ -22,6 +22,8 @@ final class PlayerViewModel: ObservableObject {
     @Published var showWebReader = false
     @Published var costPrompt: CostPrompt? = nil
     @Published var mode: AppMode = .narration
+    /// Drives the full-screen seminar cover presented over the whole app.
+    @Published var showSeminar = false
     @Published var exportMarkdown: String = ""
     @Published var featuredImageURL: URL? = nil
     // Narration mode
@@ -85,9 +87,9 @@ final class PlayerViewModel: ObservableObject {
         currentKind = kind
         mode = (kind == .seminar) ? .figure : .narration
         if mode == .figure {
-            // Show the loading screen immediately and clear stale panel state so
-            // the figure player isn't rendered against a previous session before
-            // loadFigures (async) runs.
+            // Present the full-screen seminar cover immediately and clear stale
+            // panel state before loadFigures (async) runs.
+            showSeminar = true
             status = .fetching
             panels = []
             panelTimestamps = []
@@ -105,8 +107,26 @@ final class PlayerViewModel: ObservableObject {
         status = .idle
     }
 
+    /// Dismisses the seminar cover (playback continues underneath). If the load
+    /// failed, also resets so the cover starts clean next time.
+    func dismissSeminar() {
+        showSeminar = false
+        if status == .failed { dismissFailure() }
+    }
+
+    /// Progress text shown on the seminar cover while it generates.
+    var seminarStatusText: String {
+        switch status {
+        case .fetching:               return "Fetching figures…"
+        case .cleaning:               return "Preparing…"
+        case .generating(let d, let t): return "Generating audio… (\(d)/\(t))"
+        default:                      return "Loading…"
+        }
+    }
+
     func processWebContent(title: String, bodyText: String) {
         showWebReader = false
+        showSeminar = false   // switching to narration; leave the seminar cover
         Task {
             articleTitle = title
             currentLibraryItemID = nil
@@ -176,6 +196,7 @@ final class PlayerViewModel: ObservableObject {
 
             if item.contentKind == .seminar, let stored = item.panels, !stored.isEmpty {
                 mode = .figure
+                showSeminar = true
                 panels = stored.map {
                     FigurePanel(figureNumber: $0.figureNumber, figureTitle: $0.figureTitle,
                                 label: $0.label, legendText: $0.legendText,
@@ -304,13 +325,15 @@ final class PlayerViewModel: ObservableObject {
             var chunkPCM = Data()
             for chunk in TextChunker.chunk(narration) {
                 guard generationToken == gen else { return }
-                let stream = try await streamTTS(chunk)
-                for try await data in stream {
-                    guard generationToken == gen else { return }
-                    chunkPCM.append(data)
-                    player.appendPCM(data)   // feed playback live
-                }
+                // Fetch the whole chunk (with one retry) before feeding it to the
+                // player, so a transient TTS timeout can be retried/skipped rather
+                // than aborting the entire seminar.
+                guard let pcm = await ttsChunk(chunk, token: gen) else { continue }
+                guard generationToken == gen else { return }
+                player.appendPCM(pcm)
+                chunkPCM.append(pcm)
                 CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
+                beginPlaybackIfNeeded()
             }
             cumulativeTime += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
             allPCM.append(chunkPCM)
@@ -322,9 +345,35 @@ final class PlayerViewModel: ObservableObject {
         }
 
         guard generationToken == gen else { return }
+        // If every chunk failed (e.g. no connection), surface a clear error.
+        guard !allPCM.isEmpty else {
+            throw NSError(domain: "Seminar", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Couldn't generate audio — check your connection and try again."])
+        }
         player.finalizeStreaming()
         player.setNowPlaying(title: articleTitle)   // refresh Now Playing duration
         await persistProgress()
+    }
+
+    /// Streams one TTS chunk to completion and returns its PCM, retrying once on
+    /// failure (e.g. a request timeout). Returns nil if it ultimately fails or the
+    /// generation was superseded.
+    private func ttsChunk(_ chunk: String, token: UUID) async -> Data? {
+        for attempt in 0..<2 {
+            guard generationToken == token else { return nil }
+            do {
+                var pcm = Data()
+                let stream = try await streamTTS(chunk)
+                for try await data in stream {
+                    guard generationToken == token else { return nil }
+                    pcm.append(data)
+                }
+                return pcm
+            } catch {
+                if attempt == 1 { return nil }   // gave up after a retry
+            }
+        }
+        return nil
     }
 
     private func buildNarration(for panel: FigurePanel) -> String {
@@ -358,61 +407,32 @@ final class PlayerViewModel: ObservableObject {
         return p.label.isEmpty ? p.sectionTitle : "\(p.sectionTitle) · \(p.label)"
     }
 
-    /// Ordered list of distinct section keys across the whole seminar.
-    private var orderedSectionKeys: [String] {
-        var seen = Set<String>(); var out: [String] = []
-        for p in panels where !seen.contains(p.sectionKey) { seen.insert(p.sectionKey); out.append(p.sectionKey) }
-        return out
+    /// "3 / 24" — current step among the whole timeline (Intro, Fig 1a, Fig 1b, …, Discussion).
+    var stepProgressLabel: String {
+        guard !panels.isEmpty, currentPanelIndex < panels.count else { return "" }
+        return "\(currentPanelIndex + 1) / \(panels.count)"
     }
 
-    /// "2 / 7" — current section position among all sections.
-    var sectionProgressLabel: String {
-        let keys = orderedSectionKeys
-        guard currentPanelIndex < panels.count,
-              let pos = keys.firstIndex(of: panels[currentPanelIndex].sectionKey) else { return "" }
-        return "\(pos + 1) / \(keys.count)"
-    }
+    var canStepBackward: Bool { player.canSeek && currentPanelIndex > 0 }
+    var canStepForward: Bool { player.canSeek && currentPanelIndex + 1 < panelTimestamps.count }
 
-    /// Number of panels in the figure currently shown (for panel auto-cropping).
-    var panelCountInCurrentFigure: Int {
-        guard currentPanelIndex < panels.count else { return 0 }
-        let fig = panels[currentPanelIndex].figureNumber
-        return panels.filter { $0.figureNumber == fig }.count
-    }
-
-    /// Index of the current panel within its figure (0-based reading order).
-    var panelIndexWithinFigure: Int {
-        guard currentPanelIndex < panels.count else { return 0 }
-        let fig = panels[currentPanelIndex].figureNumber
-        return (0..<currentPanelIndex).reduce(0) { panels[$1].figureNumber == fig ? $0 + 1 : $0 }
-    }
-
-    /// Jumps to the start of the next section (Abstract → Introduction → Figure 1…).
-    /// Only seeks once playback is off the streaming engine (i.e. on replay).
-    func skipToNextSection() {
-        guard player.canSeek, currentPanelIndex < panels.count else { return }
-        let key = panels[currentPanelIndex].sectionKey
-        guard let next = (currentPanelIndex + 1..<panels.count).first(where: { panels[$0].sectionKey != key }),
-              next < panelTimestamps.count else { return }
+    /// Steps one entry forward (Intro → Fig 1a → Fig 1b → Fig 2a → … → Discussion).
+    /// Seeking is only possible off the streaming engine (i.e. on replay).
+    func stepForward() {
+        guard player.canSeek else { return }
+        let next = currentPanelIndex + 1
+        guard next < panelTimestamps.count else { return }
         player.seekAbsolute(to: panelTimestamps[next].startTime)
         currentPanelIndex = next
     }
 
-    /// Jumps to the start of the current section, or the previous one if already there.
-    func skipToPreviousSection() {
-        guard player.canSeek, !panels.isEmpty, currentPanelIndex < panels.count else { return }
-        let key = panels[currentPanelIndex].sectionKey
-        var start = currentPanelIndex
-        while start > 0, panels[start - 1].sectionKey == key { start -= 1 }
-        var target = start
-        if start > 0 {                                   // already at section start → previous section
-            let prevKey = panels[start - 1].sectionKey
-            target = start - 1
-            while target > 0, panels[target - 1].sectionKey == prevKey { target -= 1 }
-        }
-        guard target < panelTimestamps.count else { return }
-        player.seekAbsolute(to: panelTimestamps[target].startTime)
-        currentPanelIndex = target
+    /// Steps one entry backward in the timeline.
+    func stepBackward() {
+        guard player.canSeek else { return }
+        let prev = currentPanelIndex - 1
+        guard prev >= 0, prev < panelTimestamps.count else { return }
+        player.seekAbsolute(to: panelTimestamps[prev].startTime)
+        currentPanelIndex = prev
     }
 
     func updateCurrentSentence(at time: TimeInterval) {
@@ -699,12 +719,11 @@ struct PlayerView: View {
 
     var body: some View {
         Group {
-            if case .ready = viewModel.status {
-                if viewModel.mode == .figure {
-                    FigurePlayerView()
-                } else {
-                    readyLayout
-                }
+            if viewModel.mode == .figure {
+                // Seminars play in a full-screen cover; the Home tab stays on the library.
+                homeLayout
+            } else if case .ready = viewModel.status {
+                readyLayout
             } else {
                 loadingLayout
             }
@@ -878,6 +897,21 @@ struct PlayerView: View {
     }
 
     // MARK: - Loading layout
+
+    // Home tab kept on the library while a seminar plays in its cover.
+    private var homeLayout: some View {
+        NavigationView {
+            libraryHome
+                .charcoalBackdrop()
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarItems(
+                    leading: costRibbon,
+                    trailing: Button { viewModel.showAPIKeySetup = true } label: {
+                        Image(systemName: "gearshape")
+                    })
+        }
+    }
 
     private var loadingLayout: some View {
         NavigationView {
