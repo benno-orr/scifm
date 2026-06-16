@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
    LastUpgradeVersion = "1500"
+   wasCreatedForAppExtension = "YES"
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -15,24 +16,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A86EA6855EBE942766AC351B"
-               BuildableName = "sciFM.app"
-               BlueprintName = "sciFM"
-               ReferencedContainer = "container:Glados.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D4FA75BE0827E6603347DC75"
-               BuildableName = "sciFMTests.xctest"
-               BlueprintName = "sciFMTests"
-               ReferencedContainer = "container:Glados.xcodeproj">
+               BlueprintIdentifier = "38A3B1C8BBF75D3CC54547AC"
+               BuildableName = "ShareExtension.appex"
+               BlueprintName = "ShareExtension"
+               ReferencedContainer = "container:sciFM.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
          <BuildActionEntry
@@ -43,10 +30,24 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "4299C14833C05035A5B96AB8"
-               BuildableName = "ShareExtension.appex"
-               BlueprintName = "ShareExtension"
-               ReferencedContainer = "container:Glados.xcodeproj">
+               BlueprintIdentifier = "48DDB3815F8AC8D1CA499701"
+               BuildableName = "sciFM.app"
+               BlueprintName = "sciFM"
+               ReferencedContainer = "container:sciFM.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "4D58B3840CB027ECF13C61DD"
+               BuildableName = "sciFMTests.xctest"
+               BlueprintName = "sciFMTests"
+               ReferencedContainer = "container:sciFM.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -60,10 +61,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A86EA6855EBE942766AC351B"
-            BuildableName = "sciFM.app"
-            BlueprintName = "sciFM"
-            ReferencedContainer = "container:Glados.xcodeproj">
+            BlueprintIdentifier = "38A3B1C8BBF75D3CC54547AC"
+            BuildableName = "ShareExtension.appex"
+            BlueprintName = "ShareExtension"
+            ReferencedContainer = "container:sciFM.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -72,10 +73,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D4FA75BE0827E6603347DC75"
+               BlueprintIdentifier = "4D58B3840CB027ECF13C61DD"
                BuildableName = "sciFMTests.xctest"
                BlueprintName = "sciFMTests"
-               ReferencedContainer = "container:Glados.xcodeproj">
+               ReferencedContainer = "container:sciFM.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -84,22 +85,23 @@
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
-      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
-      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      selectedDebuggerIdentifier = ""
+      selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.PosixSpawn"
       launchStyle = "0"
       useCustomWorkingDirectory = "NO"
       ignoresPersistentStateOnLaunch = "NO"
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
-      allowLocationSimulation = "YES">
+      allowLocationSimulation = "YES"
+      launchAutomaticallySubstyle = "2">
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A86EA6855EBE942766AC351B"
-            BuildableName = "sciFM.app"
-            BlueprintName = "sciFM"
-            ReferencedContainer = "container:Glados.xcodeproj">
+            BlueprintIdentifier = "38A3B1C8BBF75D3CC54547AC"
+            BuildableName = "ShareExtension.appex"
+            BlueprintName = "ShareExtension"
+            ReferencedContainer = "container:sciFM.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -115,10 +117,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A86EA6855EBE942766AC351B"
-            BuildableName = "sciFM.app"
-            BlueprintName = "sciFM"
-            ReferencedContainer = "container:Glados.xcodeproj">
+            BlueprintIdentifier = "38A3B1C8BBF75D3CC54547AC"
+            BuildableName = "ShareExtension.appex"
+            BlueprintName = "ShareExtension"
+            ReferencedContainer = "container:sciFM.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
