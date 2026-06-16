@@ -224,6 +224,7 @@ struct ArticleDetailSheet: View {
     let article: FeedArticle
     let onReadAbstract: (String) -> Void
     let onReadFull: () -> Void
+    var onExportDoc: (() -> Void)? = nil
 
     @State private var abstract: String? = nil
     @State private var isFetching = false
@@ -267,6 +268,13 @@ struct ArticleDetailSheet: View {
                             Label("Read Full Article", systemImage: "doc.text")
                                 .frame(maxWidth: .infinity).padding(.vertical, 10)
                                 .background(Color.accentColor).foregroundColor(.white).cornerRadius(10)
+                        }
+                        if let onExportDoc {
+                            Button { onExportDoc() } label: {
+                                Label("Export Markdown", systemImage: "doc.badge.arrow.up")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                    .background(Color.accentColor.opacity(0.12)).cornerRadius(10)
+                            }
                         }
                     }
                 }

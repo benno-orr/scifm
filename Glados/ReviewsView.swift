@@ -25,6 +25,13 @@ struct ReviewsView: View {
                             abstractText: { await resolveAbstract(article) }
                         )
                         .listRowBackground(Color.rowTranslucent)
+                        .swipeActions(edge: .trailing) {
+                            Button {
+                                viewModel.generateDocument(url: article.url)
+                                selectedTab = 0
+                            } label: { Label("Markdown", systemImage: "doc.badge.arrow.up") }
+                            .tint(.accentColor)
+                        }
                     }
                     .listStyle(.plain)
                 }
@@ -57,6 +64,11 @@ struct ReviewsView: View {
                         selectedArticle = nil
                         viewModel.load(url: article.url, kind: .review)
                         selectedTab = 0
+                    },
+                    onExportDoc: {
+                        selectedArticle = nil
+                        selectedTab = 0
+                        viewModel.generateDocument(url: article.url)
                     }
                 )
             }

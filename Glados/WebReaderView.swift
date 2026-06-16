@@ -5,15 +5,17 @@ import WebKit
 
 struct WebReaderSheet: View {
     let url: URL
-    let onExtract: (String, String) -> Void   // (title, bodyText)
+    let onRead: (String, String) -> Void        // (title, bodyText) → narrate
+    let onExportDoc: (String, String) -> Void    // (title, bodyText) → cleaned .md
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationView {
-            WebReaderView(url: url, onExtract: { title, body in
-                onExtract(title, body)
-                dismiss()
-            })
+            WebReaderView(
+                url: url,
+                onRead: { title, body in onRead(title, body); dismiss() },
+                onExportDoc: { title, body in onExportDoc(title, body); dismiss() }
+            )
             .navigationTitle("Browse")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -30,10 +32,11 @@ struct WebReaderSheet: View {
 
 struct WebReaderView: UIViewControllerRepresentable {
     let url: URL
-    let onExtract: (String, String) -> Void
+    let onRead: (String, String) -> Void
+    let onExportDoc: (String, String) -> Void
 
     func makeUIViewController(context: Context) -> _WebReaderVC {
-        _WebReaderVC(url: url, onExtract: onExtract)
+        _WebReaderVC(url: url, onRead: onRead, onExportDoc: onExportDoc)
     }
     func updateUIViewController(_ vc: _WebReaderVC, context: Context) {}
 }
@@ -42,15 +45,23 @@ struct WebReaderView: UIViewControllerRepresentable {
 
 final class _WebReaderVC: UIViewController, WKNavigationDelegate {
     private let url: URL
-    private let onExtract: (String, String) -> Void
+    private let onRead: (String, String) -> Void
+    private let onExportDoc: (String, String) -> Void
 
     private var webView: WKWebView!
     private var readButton: UIButton!
+    private var exportButton: UIButton!
+    private var buttonStack: UIStackView!
     private var spinner: UIActivityIndicatorView!
+    /// Which action the in-flight extraction should fire on completion.
+    private var pendingForDoc = false
 
-    init(url: URL, onExtract: @escaping (String, String) -> Void) {
+    init(url: URL,
+         onRead: @escaping (String, String) -> Void,
+         onExportDoc: @escaping (String, String) -> Void) {
         self.url = url
-        self.onExtract = onExtract
+        self.onRead = onRead
+        self.onExportDoc = onExportDoc
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -67,18 +78,32 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
         webView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webView)
 
-        // "Read this article" pill button floating over the bottom
-        var cfg = UIButton.Configuration.filled()
-        cfg.title = "Read this article"
-        cfg.image = UIImage(systemName: "waveform")
-        cfg.imagePadding = 8
-        cfg.cornerStyle = .capsule
-        readButton = UIButton(configuration: cfg)
-        readButton.translatesAutoresizingMaskIntoConstraints = false
+        // "Read this article" (narrate) — primary, filled.
+        var readCfg = UIButton.Configuration.filled()
+        readCfg.title = "Read this article"
+        readCfg.image = UIImage(systemName: "waveform")
+        readCfg.imagePadding = 6
+        readCfg.cornerStyle = .capsule
+        readButton = UIButton(configuration: readCfg)
         readButton.addTarget(self, action: #selector(readTapped), for: .touchUpInside)
-        view.addSubview(readButton)
 
-        // Loading spinner shown over button while extracting
+        // "Export .md" — secondary, tinted.
+        var exportCfg = UIButton.Configuration.tinted()
+        exportCfg.title = "Export .md"
+        exportCfg.image = UIImage(systemName: "doc.badge.arrow.up")
+        exportCfg.imagePadding = 6
+        exportCfg.cornerStyle = .capsule
+        exportButton = UIButton(configuration: exportCfg)
+        exportButton.addTarget(self, action: #selector(exportTapped), for: .touchUpInside)
+
+        buttonStack = UIStackView(arrangedSubviews: [readButton, exportButton])
+        buttonStack.axis = .horizontal
+        buttonStack.spacing = 10
+        buttonStack.distribution = .fillProportionally
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(buttonStack)
+
+        // Loading spinner shown over the buttons while extracting
         spinner = UIActivityIndicatorView(style: .medium)
         spinner.translatesAutoresizingMaskIntoConstraints = false
         spinner.hidesWhenStopped = true
@@ -90,13 +115,14 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            readButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            readButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
-            readButton.heightAnchor.constraint(equalToConstant: 44),
-            readButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+            buttonStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            buttonStack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            buttonStack.heightAnchor.constraint(equalToConstant: 44),
+            buttonStack.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
+            buttonStack.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
 
-            spinner.centerXAnchor.constraint(equalTo: readButton.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: readButton.centerYAnchor),
+            spinner.centerXAnchor.constraint(equalTo: buttonStack.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: buttonStack.centerYAnchor),
         ])
 
         webView.load(URLRequest(url: url))
@@ -105,17 +131,26 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        readButton.isEnabled = false
+        setButtonsEnabled(false)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        readButton.isEnabled = true
+        setButtonsEnabled(true)
+    }
+
+    private func setButtonsEnabled(_ on: Bool) {
+        readButton.isEnabled = on
+        exportButton.isEnabled = on
     }
 
     // MARK: - Extraction
 
-    @objc private func readTapped() {
-        readButton.isHidden = true
+    @objc private func readTapped()   { extract(forDoc: false) }
+    @objc private func exportTapped() { extract(forDoc: true) }
+
+    private func extract(forDoc: Bool) {
+        pendingForDoc = forDoc
+        buttonStack.isHidden = true
         spinner.startAnimating()
 
         let js = """
@@ -200,7 +235,7 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
         webView.evaluateJavaScript(js) { [weak self] result, _ in
             guard let self else { return }
             self.spinner.stopAnimating()
-            self.readButton.isHidden = false
+            self.buttonStack.isHidden = false
 
             guard let jsonStr = result as? String,
                   let data = jsonStr.data(using: .utf8),
@@ -208,14 +243,18 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
                   let title = json["title"],
                   let body = json["body"], body.count > 200
             else {
-                // Show brief error feedback
-                var cfg = self.readButton.configuration ?? .filled()
-                cfg.title = "Couldn't extract text — try scrolling to article first"
-                self.readButton.configuration = cfg
+                // Show brief error feedback on the button that was tapped
+                let btn = self.pendingForDoc ? self.exportButton : self.readButton
+                var cfg = btn?.configuration ?? .filled()
+                cfg.title = "Couldn't extract — scroll to the article first"
+                btn?.configuration = cfg
                 return
             }
 
-            DispatchQueue.main.async { self.onExtract(title, body) }
+            let forDoc = self.pendingForDoc
+            DispatchQueue.main.async {
+                if forDoc { self.onExportDoc(title, body) } else { self.onRead(title, body) }
+            }
         }
     }
 }

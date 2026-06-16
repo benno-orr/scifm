@@ -73,8 +73,18 @@ enum AppSettings {
     static var llmProvider: LLMProviderType {
         get {
             let raw = UserDefaults.standard.string(forKey: "llmProvider") ?? ""
-            return LLMProviderType(rawValue: raw) ?? .gpt4oMini
+            return LLMProviderType(rawValue: raw) ?? .haiku
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "llmProvider") }
+    }
+
+    /// One-time switch of the polishing model to Claude Haiku, overriding any
+    /// previously persisted choice once. The user remains free to change it in
+    /// Settings afterward (this won't re-fire).
+    static func migrateToHaikuPolishingIfNeeded() {
+        let key = "didMigrateLLMToHaiku"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        llmProvider = .haiku
+        UserDefaults.standard.set(true, forKey: key)
     }
 }

@@ -28,6 +28,10 @@ struct SciFMApp: App {
                 PrimaryView(selectedTab: $selectedTab)
                     .tabItem { Label("Papers", systemImage: "doc.text.magnifyingglass") }
                     .tag(3)
+
+                SeminarDebugView()
+                    .tabItem { Label("Seminar Debug", systemImage: "ladybug") }
+                    .tag(4)
             }
             .environmentObject(playerViewModel)
             .preferredColorScheme(.dark)
@@ -37,7 +41,10 @@ struct SciFMApp: App {
                     .preferredColorScheme(.dark)
             }
             .onOpenURL { url in handleDeepLink(url) }
-            .onAppear { checkPendingURL() }
+            .onAppear {
+                AppSettings.migrateToHaikuPolishingIfNeeded()
+                checkPendingURL()
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
