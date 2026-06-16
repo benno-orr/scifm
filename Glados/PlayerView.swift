@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import UniformTypeIdentifiers
+import UIKit
 
 // MARK: - Model
 
@@ -33,6 +34,22 @@ final class PlayerViewModel: ObservableObject {
     @Published var panels: [FigurePanel] = []
     @Published var panelTimestamps: [PanelTimestamp] = []
     @Published var currentPanelIndex: Int = 0
+    /// Presents the "fix pronunciation" sheet (from either player).
+    @Published var showPronunciationSheet = false
+
+    // Document export (cleaned .md for third-party readers like ElevenReader) —
+    // independent of the audio pipeline, so it doesn't disturb playback.
+    @Published var showDocumentSheet = false
+    @Published var documentExport: DocumentExport? = nil
+    @Published var documentStatus = ""
+    @Published var documentError: String? = nil
+
+    /// Full narration plan of the current article, so a pronunciation fix can
+    /// regenerate the rest of it — including not-yet-generated chunks.
+    private var narrationPlan: [NarrationUnit] = []
+    /// Per-panel narration text captured during seminar generation, so a fix can
+    /// re-speak the remaining panels without re-calling the LLM.
+    private var panelNarrations: [Int: String] = [:]
 
     let player = AudioPlayer()
     private let processor = ArticleProcessor()
@@ -158,6 +175,65 @@ final class PlayerViewModel: ObservableObject {
         status = .idle
     }
 
+    // MARK: - Document export (cleaned .md, no TTS)
+
+    /// Fetches + cleans an article and produces a pronunciation-corrected Markdown
+    /// document for export to third-party readers (e.g. ElevenReader) — no audio
+    /// is generated and current playback is left untouched.
+    func generateDocument(url: URL) {
+        pendingURL = url
+        documentExport = nil
+        documentError = nil
+        documentStatus = "Fetching article…"
+        showDocumentSheet = true
+        Task {
+            do {
+                async let imageURL = processor.extractFeaturedImage(from: url)
+                let article = try await processor.process(url: url)
+                documentStatus = "Cleaning text…"
+                await buildDocument(title: article.title, rawBody: article.fullText,
+                                    sourceURL: url.absoluteString, imageURL: await imageURL)
+            } catch let err as DeepgramError {
+                if case .missingAPIKey = err { showAPIKeySetup = true }
+                documentError = err.localizedDescription
+            } catch {
+                documentError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Builds a document from text already extracted in the in-app browser (the
+    /// fallback when a direct fetch fails — common for Nature/Cell pages).
+    func generateDocumentFromText(title: String, bodyText: String) {
+        showWebReader = false
+        documentExport = nil
+        documentError = nil
+        documentStatus = "Cleaning text…"
+        showDocumentSheet = true
+        Task {
+            let cleaned = await processor.cleanText(bodyText)
+            await buildDocument(title: title, rawBody: cleaned,
+                                sourceURL: pendingURL?.absoluteString ?? "", imageURL: nil)
+        }
+    }
+
+    /// Shared tail of document generation: LLM cleanup, then pronunciation rewrite
+    /// applied LAST so the corrections (and the user dictionary) survive into the
+    /// exported text verbatim.
+    private func buildDocument(title: String, rawBody: String, sourceURL: String, imageURL: URL?) async {
+        let cleaned = await LLMCleaner.shared.clean(title: title, text: rawBody)
+        let pronounced = ScientificPronunciation.rewrite(cleaned)
+        let md = buildMarkdown(title: title, body: pronounced, sourceURL: sourceURL, imageURL: imageURL)
+        documentExport = DocumentExport(title: title, markdown: md)
+    }
+
+    /// From the document error screen: retry by extracting the text in the browser
+    /// (where the user can tap "Export .md").
+    func startDocFromBrowser() {
+        showDocumentSheet = false
+        showWebReader = true
+    }
+
     func loadLibraryItem(_ item: LibraryItem) async {
         // Already the active item (still generating or just paused) — resume in
         // place rather than reloading or regenerating.
@@ -174,6 +250,7 @@ final class PlayerViewModel: ObservableObject {
         player.stop()
         sentences = []; currentSentenceIndex = 0
         panels = []; panelTimestamps = []; currentPanelIndex = 0
+        narrationPlan = []; panelNarrations = [:]
         status = .fetching
         errorMessage = nil
 
@@ -241,6 +318,8 @@ final class PlayerViewModel: ObservableObject {
         panels = []
         panelTimestamps = []
         currentPanelIndex = 0
+        panelNarrations = [:]
+        narrationPlan = []
         currentLibraryItemID = nil
         status = .fetching
         errorMessage = nil
@@ -306,21 +385,8 @@ final class PlayerViewModel: ObservableObject {
                                              panelLabel: panel.label, startTime: cumulativeTime))
             panelTimestamps = timestamps
 
-            let narration: String
-            if panel.isTextSection {
-                // Abstract / Introduction — say the section name, then the text.
-                narration = ScientificPronunciation.rewrite("\(panel.figureTitle). \(panel.legendText)")
-            } else {
-                let figLabel = panel.label.isEmpty
-                    ? "Figure \(panel.figureNumber)."
-                    : "Figure \(panel.figureNumber), panel \(panel.label)."
-                let figRef = panel.label.isEmpty
-                    ? "Figure \(panel.figureNumber)"
-                    : "Figure \(panel.figureNumber)\(panel.label)"
-                let merged = await LLMCleaner.shared.mergeForFigure(
-                    figureRef: figRef, legendText: panel.legendText, contextSentences: panel.textReferences)
-                narration = ScientificPronunciation.rewrite("\(figLabel) \(merged)")
-            }
+            let narration = await panelNarration(panel)
+            panelNarrations[i] = narration
 
             var chunkPCM = Data()
             for chunk in TextChunker.chunk(narration) {
@@ -388,6 +454,180 @@ final class PlayerViewModel: ObservableObject {
         return parts.joined(separator: " ")
     }
 
+    /// The narration for one seminar panel (section title + LLM-merged legend),
+    /// pronunciation-rewritten. The LLM merge is the expensive part — cached into
+    /// `panelNarrations` during generation so a fix can re-speak without re-calling.
+    private func panelNarration(_ panel: FigurePanel) async -> String {
+        if panel.isTextSection {
+            return ScientificPronunciation.rewrite("\(panel.figureTitle). \(panel.legendText)")
+        }
+        let figLabel = panel.label.isEmpty
+            ? "Figure \(panel.figureNumber)."
+            : "Figure \(panel.figureNumber), panel \(panel.label)."
+        let figRef = panel.label.isEmpty
+            ? "Figure \(panel.figureNumber)"
+            : "Figure \(panel.figureNumber)\(panel.label)"
+        let merged = await LLMCleaner.shared.mergeForFigure(
+            figureRef: figRef, legendText: panel.legendText, contextSentences: panel.textReferences)
+        return ScientificPronunciation.rewrite("\(figLabel) \(merged)")
+    }
+
+    // MARK: - Live pronunciation fixes
+
+    /// Text shown in the fix sheet to help the listener spot the offending word.
+    var currentNarrationContext: String {
+        guard currentSentenceIndex < sentences.count else { return "" }
+        return sentences[currentSentenceIndex].text
+    }
+    var currentSeminarContext: String {
+        guard currentPanelIndex < panels.count else { return "" }
+        let p = panels[currentPanelIndex]
+        return p.legendText.isEmpty ? p.figureTitle : p.legendText
+    }
+
+    /// Saves a pronunciation to the dictionary and regenerates the rest of the
+    /// current article (from the current position) with the fix applied.
+    func applyPronunciation(word: String, sayAs: String) {
+        PronunciationStore.shared.add(word: word, replacement: sayAs)
+        switch mode {
+        case .narration: regenerateNarrationTail()
+        case .figure:    regenerateSeminarTail()
+        }
+    }
+
+    /// Suffix of a narration plan starting at the `cut`-th speak unit (inclusive),
+    /// dropping any pause that immediately precedes it (already in the kept head).
+    private static func planSuffix(_ plan: [NarrationUnit], fromSpeakIndex cut: Int) -> [NarrationUnit] {
+        var speakSeen = -1
+        for (i, u) in plan.enumerated() {
+            if case .speak = u {
+                speakSeen += 1
+                if speakSeen == cut { return Array(plan[i...]) }
+            }
+        }
+        return []
+    }
+
+    private func regenerateNarrationTail() {
+        guard mode == .narration, !sentences.isEmpty else { return }
+        let t = player.currentTime
+        var cut = 0
+        for (i, s) in sentences.enumerated() { if s.startTime <= t { cut = i } else { break } }
+        let cutTime = sentences[cut].startTime
+        guard let head = player.currentPCMHead(upTo: cutTime) else { return }
+        let kept = Array(sentences[0..<cut])
+        // Prefer the full plan (covers chunks not yet generated); otherwise fall
+        // back to the generated sentences (a replayed library item).
+        let tail: [NarrationUnit] = narrationPlan.isEmpty
+            ? sentences[cut...].map { .speak($0.text) }
+            : Self.planSuffix(narrationPlan, fromSpeakIndex: cut)
+        generationToken = UUID()
+        let gen = generationToken
+        Task { await streamNarrationTail(head: head, cutTime: cutTime, kept: kept, tail: tail, gen: gen) }
+    }
+
+    private func streamNarrationTail(head: Data, cutTime: TimeInterval,
+                                     kept: [SentenceTimestamp], tail: [NarrationUnit], gen: UUID) async {
+        player.startStreaming(seeded: true)
+        player.appendPCM(head)
+        player.seekAbsolute(to: cutTime)   // resume from the splice; head plays from here
+
+        var allPCM = head
+        var rebuilt = kept
+        var cumulative = cutTime
+        status = .ready
+        for unit in tail {
+            guard generationToken == gen else { return }
+            switch unit {
+            case .pause(let secs):
+                player.appendSilence(secs)
+                allPCM.append(Data(count: Int(secs * 24000) * 2))
+                cumulative += secs
+            case .speak(let original):
+                rebuilt.append(SentenceTimestamp(text: original, startTime: cumulative))
+                sentences = rebuilt
+                var chunkPCM = Data()
+                for piece in TextChunker.chunk(ScientificPronunciation.rewrite(original)) {
+                    guard generationToken == gen else { return }
+                    guard let pcm = await ttsChunk(piece, token: gen) else { continue }
+                    guard generationToken == gen else { return }
+                    player.appendPCM(pcm)
+                    chunkPCM.append(pcm)
+                    CostTracker.shared.record(Pricing.ttsCost(chars: piece.count, provider: AppSettings.ttsProvider))
+                }
+                cumulative += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
+                allPCM.append(chunkPCM)
+            }
+        }
+        guard generationToken == gen else { return }
+        player.finalizeStreaming()
+        player.setNowPlaying(title: articleTitle)
+        sentences = rebuilt
+        if let id = currentLibraryItemID {
+            let wav = WAVBuilder.make(pcmData: allPCM)
+            let stored = rebuilt.map { StoredSentence(text: $0.text, startTime: $0.startTime) }
+            await LibraryManager.shared.finalizeEntry(id, wavData: wav, sentences: stored, duration: player.duration)
+        }
+    }
+
+    private func regenerateSeminarTail() {
+        guard mode == .figure, !panels.isEmpty, currentPanelIndex < panelTimestamps.count else { return }
+        let cut = currentPanelIndex
+        let cutTime = panelTimestamps[cut].startTime
+        guard let head = player.currentPCMHead(upTo: cutTime) else { return }
+        generationToken = UUID()
+        let gen = generationToken
+        Task { await streamSeminarTail(fromIndex: cut, head: head, cutTime: cutTime, gen: gen) }
+    }
+
+    private func streamSeminarTail(fromIndex cut: Int, head: Data, cutTime: TimeInterval, gen: UUID) async {
+        player.startStreaming(seeded: true)
+        player.appendPCM(head)
+        player.seekAbsolute(to: cutTime)
+
+        var allPCM = head
+        var timestamps = Array(panelTimestamps[0..<cut])
+        var cumulative = cutTime
+        status = .ready
+        for i in cut..<panels.count {
+            guard generationToken == gen else { return }
+            let panel = panels[i]
+            timestamps.append(PanelTimestamp(panelIndex: i, figureNumber: panel.figureNumber,
+                                             panelLabel: panel.label, startTime: cumulative))
+            panelTimestamps = timestamps
+            // Re-speak from the cached narration (re-applying the rewrite so the new
+            // entry takes), rebuilding via the LLM only for any panel not yet cached.
+            let base: String
+            if let cached = panelNarrations[i] { base = cached }
+            else { base = await panelNarration(panel) }
+            panelNarrations[i] = base
+            var chunkPCM = Data()
+            for piece in TextChunker.chunk(ScientificPronunciation.rewrite(base)) {
+                guard generationToken == gen else { return }
+                guard let pcm = await ttsChunk(piece, token: gen) else { continue }
+                guard generationToken == gen else { return }
+                player.appendPCM(pcm)
+                chunkPCM.append(pcm)
+                CostTracker.shared.record(Pricing.ttsCost(chars: piece.count, provider: AppSettings.ttsProvider))
+            }
+            cumulative += TimeInterval(chunkPCM.count) / TimeInterval(24000 * 2)
+            allPCM.append(chunkPCM)
+        }
+        guard generationToken == gen else { return }
+        player.finalizeStreaming()
+        player.setNowPlaying(title: articleTitle)
+        if let id = currentLibraryItemID {
+            let wav = WAVBuilder.make(pcmData: allPCM)
+            let stored = zip(panels, timestamps).map { panel, ts in
+                StoredPanel(figureNumber: panel.figureNumber, label: panel.label,
+                            figureTitle: panel.figureTitle, legendText: panel.legendText,
+                            imageURL: panel.imageURL?.absoluteString, startTime: ts.startTime)
+            }
+            await LibraryManager.shared.finalizeEntry(
+                id, wavData: wav, sentences: [], duration: player.duration, panels: stored)
+        }
+    }
+
     func updateCurrentPanel(at time: TimeInterval) {
         guard !panelTimestamps.isEmpty else { return }
         var idx = 0
@@ -414,7 +654,11 @@ final class PlayerViewModel: ObservableObject {
     }
 
     var canStepBackward: Bool { player.canSeek && currentPanelIndex > 0 }
-    var canStepForward: Bool { player.canSeek && currentPanelIndex + 1 < panelTimestamps.count }
+    var canStepForward: Bool {
+        guard player.canSeek, currentPanelIndex + 1 < panelTimestamps.count else { return false }
+        // Only allow stepping to a section whose audio has been generated.
+        return panelTimestamps[currentPanelIndex + 1].startTime <= player.duration + 0.5
+    }
 
     /// Steps one entry forward (Intro → Fig 1a → Fig 1b → Fig 2a → … → Discussion).
     /// Seeking is only possible off the streaming engine (i.e. on replay).
@@ -455,6 +699,7 @@ final class PlayerViewModel: ObservableObject {
         generationToken = UUID()   // abort any in-flight generation
         player.stop()
         sentences = []; currentSentenceIndex = 0
+        narrationPlan = []
         currentLibraryItemID = nil; exportMarkdown = ""; featuredImageURL = nil
         articleTitle = title; errorMessage = nil
         Task {
@@ -501,7 +746,7 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    private func buildMarkdown(title: String, body: String) -> String {
+    private func buildMarkdown(title: String, body: String, sourceURL: String, imageURL: URL?) -> String {
         // Trailing space on each paragraph gives ElevenReader a natural pause at paragraph breaks
         let paddedBody = body
             .components(separatedBy: "\n\n")
@@ -510,10 +755,10 @@ final class PlayerViewModel: ObservableObject {
             .joined(separator: "\n\n")
 
         var parts: [String] = ["# \(title)"]
-        if !currentSourceURL.isEmpty {
-            parts.append("> \(currentSourceURL)")
+        if !sourceURL.isEmpty {
+            parts.append("> \(sourceURL)")
         }
-        if let img = featuredImageURL {
+        if let img = imageURL {
             parts.append("![\(title)](\(img.absoluteString))")
         }
         parts.append("---")
@@ -541,6 +786,7 @@ final class PlayerViewModel: ObservableObject {
         player.stop()
         sentences = []
         currentSentenceIndex = 0
+        narrationPlan = []
         currentLibraryItemID = nil
         exportMarkdown = ""
         featuredImageURL = nil
@@ -567,9 +813,11 @@ final class PlayerViewModel: ObservableObject {
         let pronounced = ScientificPronunciation.rewrite(article.fullText)
         status = .cleaning
         let llmCleaned = await LLMCleaner.shared.clean(title: article.title, text: pronounced)
-        exportMarkdown = buildMarkdown(title: article.title, body: llmCleaned)
+        exportMarkdown = buildMarkdown(title: article.title, body: llmCleaned,
+                                       sourceURL: currentSourceURL, imageURL: featuredImageURL)
         // Split into speak chunks + pauses (a long pause follows each section title).
         let units = NarrationBuilder.units(from: llmCleaned)
+        narrationPlan = units   // retained so a pronunciation fix can regenerate the tail
         let speakCount = units.filter { if case .speak = $0 { return true } else { return false } }.count
 
         // Estimate the TTS spend and let the user cancel before we make the call.
@@ -692,6 +940,20 @@ struct CostPrompt: Identifiable {
     let provider: String
 }
 
+/// A generated, pronunciation-corrected Markdown document ready to export.
+struct DocumentExport: Identifiable {
+    let id = UUID()
+    let title: String
+    let markdown: String
+    var filename: String {
+        let safe = title
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|"))
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespaces)
+        return "\(safe.isEmpty ? "document" : safe).md"
+    }
+}
+
 // MARK: - Markdown export file
 
 struct MarkdownExportFile: Transferable {
@@ -704,6 +966,97 @@ struct MarkdownExportFile: Transferable {
             try file.markdown.write(to: url, atomically: true, encoding: .utf8)
             return SentTransferredFile(url)
         }
+    }
+}
+
+// MARK: - Document export sheet
+
+/// Shows document generation progress, then a preview + share/export of the
+/// cleaned `.md` (for ElevenReader and other third-party readers).
+struct DocumentExportSheet: View {
+    @EnvironmentObject var viewModel: PlayerViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if let doc = viewModel.documentExport {
+                    ready(doc)
+                } else if let err = viewModel.documentError {
+                    errorView(err)
+                } else {
+                    progress
+                }
+            }
+            .navigationTitle("Document")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+    }
+
+    private var progress: some View {
+        VStack(spacing: 14) {
+            ProgressView().scaleEffect(1.3)
+            Text(viewModel.documentStatus).font(.subheadline).foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func ready(_ doc: DocumentExport) -> some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                Text(doc.markdown)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            Divider()
+            HStack(spacing: 12) {
+                ShareLink(
+                    item: MarkdownExportFile(markdown: doc.markdown, filename: doc.filename),
+                    preview: SharePreview(doc.title, image: Image(systemName: "doc.plaintext"))
+                ) {
+                    Label("Export .md", systemImage: "square.and.arrow.up")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.accentColor.opacity(0.15))
+                        .cornerRadius(10)
+                }
+                Button {
+                    UIPasteboard.general.string = doc.markdown
+                    copied = true
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .frame(width: 44, height: 44)
+                        .background(Color.accentColor.opacity(0.15))
+                        .cornerRadius(10)
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func errorView(_ err: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 44)).foregroundColor(.orange)
+            Text(err)
+                .font(.callout).foregroundColor(.red)
+                .multilineTextAlignment(.center).padding(.horizontal, 24)
+            if viewModel.pendingURL != nil {
+                Button { viewModel.startDocFromBrowser() } label: {
+                    Label("Read full text in browser", systemImage: "safari")
+                        .font(.subheadline)
+                        .padding(.horizontal, 20).padding(.vertical, 10)
+                        .background(Color.accentColor.opacity(0.12)).cornerRadius(10)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -750,10 +1103,19 @@ struct PlayerView: View {
         }
         .sheet(isPresented: $viewModel.showWebReader) {
             if let url = viewModel.pendingURL {
-                WebReaderSheet(url: url) { title, body in
-                    viewModel.processWebContent(title: title, bodyText: body)
-                }
+                WebReaderSheet(
+                    url: url,
+                    onRead: { title, body in viewModel.processWebContent(title: title, bodyText: body) },
+                    onExportDoc: { title, body in viewModel.generateDocumentFromText(title: title, bodyText: body) }
+                )
             }
+        }
+        .sheet(isPresented: $viewModel.showPronunciationSheet) {
+            PronunciationSheet(context: viewModel.currentNarrationContext)
+                .environmentObject(viewModel)
+        }
+        .sheet(isPresented: $viewModel.showDocumentSheet) {
+            DocumentExportSheet().environmentObject(viewModel)
         }
         .alert("Generate narration?", isPresented: Binding(
             get: { viewModel.costPrompt != nil },
@@ -798,6 +1160,12 @@ struct PlayerView: View {
                     ) {
                         Image(systemName: "square.and.arrow.up").font(.caption).foregroundColor(.secondary)
                     }
+                }
+                Button {
+                    viewModel.player.pause()
+                    viewModel.showPronunciationSheet = true
+                } label: {
+                    Image(systemName: "character.bubble").font(.caption).foregroundColor(.secondary)
                 }
                 Button { viewModel.showAPIKeySetup = true } label: {
                     Image(systemName: "gearshape").font(.caption).foregroundColor(.secondary)
@@ -1011,6 +1379,17 @@ struct PlayerView: View {
             TextField("https://pubmed.ncbi.nlm.nih.gov/…", text: $pastedURL)
                 .font(.caption).keyboardType(.URL).autocorrectionDisabled()
                 .padding(8).background(Color(.secondarySystemBackground)).cornerRadius(8)
+            Button {
+                if let url = URL(string: pastedURL.trimmingCharacters(in: .whitespaces)) {
+                    viewModel.generateDocument(url: url)
+                    pastedURL = ""
+                }
+            } label: {
+                Image(systemName: "doc.badge.arrow.up")
+            }
+            .disabled(pastedURL.isEmpty)
+            .help("Export a cleaned .md (no audio)")
+
             Button("Go") {
                 if let url = URL(string: pastedURL.trimmingCharacters(in: .whitespaces)) {
                     viewModel.load(url: url, kind: .primary)

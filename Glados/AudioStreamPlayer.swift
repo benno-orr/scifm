@@ -35,12 +35,15 @@ final class AudioPlayer: ObservableObject {
     var onPlaybackFinished: (() -> Void)?
 
     private var avPlayer: AVAudioPlayer?
+    private var loadedPCM: Data?              // PCM of a loaded WAV, for tail regeneration
     private var ticker: AnyCancellable?
 
     // Streaming mode (AVAudioEngine)
     private var engine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
-    private var streamingDuration: TimeInterval = 0
+    private var streamData = Data()           // accumulated int16 PCM, enables seeking
+    private var streamBaseTime: TimeInterval = 0  // time offset of the current schedule origin
+    private var scheduleEpoch = 0             // bumped on seek to ignore stale buffer callbacks
     private var streamingStarted = false
     private var streamingFinalized = false
     private var pendingBuffers = 0      // scheduled but not yet played out
@@ -60,11 +63,26 @@ final class AudioPlayer: ObservableObject {
         avPlayer?.prepareToPlay()
         duration = avPlayer?.duration ?? 0
         currentTime = 0
+        // Keep the raw PCM (strip the 44-byte WAV header) so a pronunciation fix
+        // can regenerate the article tail even from a replayed library item.
+        loadedPCM = wavData.count > 44 ? wavData.subdata(in: 44..<wavData.count) : nil
     }
 
-    /// Seeking is only possible once playback is backed by a loaded WAV
-    /// (AVAudioPlayer); the live streaming engine can't be scrubbed.
-    var canSeek: Bool { avPlayer != nil }
+    /// Raw int16 PCM from the start up to `time`, from whichever source is active
+    /// (the live streaming buffer or a loaded WAV). Used to keep the already-heard
+    /// portion when regenerating the rest of the article. nil if no audio is loaded.
+    func currentPCMHead(upTo time: TimeInterval) -> Data? {
+        let source: Data
+        if engine != nil { source = streamData }
+        else if let pcm = loadedPCM { source = pcm }
+        else { return nil }
+        let byteOffset = min(max(0, Int(time * 24000) * 2), source.count)
+        return source.subdata(in: 0..<byteOffset)
+    }
+
+    /// Seeking is supported both for a loaded WAV and the live streaming engine
+    /// (within already-generated audio).
+    var canSeek: Bool { avPlayer != nil || engine != nil }
 
     func play() {
         userPaused = false
@@ -94,17 +112,43 @@ final class AudioPlayer: ObservableObject {
     func togglePlayPause() { isPlaying ? pause() : play() }
 
     func seek(to fraction: Double) {
-        guard !streamingStarted, duration > 0 else { return }
-        let t = fraction * duration
-        avPlayer?.currentTime = t
-        currentTime = t
-        syncNowPlaying()
+        guard duration > 0 else { return }
+        seekAbsolute(to: fraction * duration)
     }
 
     func seekAbsolute(to time: TimeInterval) {
-        guard !streamingStarted else { return }
-        avPlayer?.currentTime = time
-        currentTime = time
+        if engine != nil {
+            seekStreaming(to: time)
+        } else if let p = avPlayer {
+            let t = max(0, min(time, p.duration))
+            p.currentTime = t
+            currentTime = t
+            syncNowPlaying()
+        }
+    }
+
+    /// Seeks within already-generated streaming audio by re-scheduling the
+    /// remaining PCM from the target time. Forward seeks clamp to what's generated.
+    private func seekStreaming(to time: TimeInterval) {
+        guard let pn = playerNode, engine != nil else { return }
+        let total = Double(streamData.count) / Double(24000 * 2)
+        let t = max(0, min(time, total))
+        var byteOffset = Int(t * 24000) * 2
+        if byteOffset > streamData.count { byteOffset = streamData.count }
+
+        scheduleEpoch += 1          // ignore completion callbacks from the old schedule
+        pn.stop()
+        pendingBuffers = 0
+        streamBaseTime = t
+        currentTime = t
+        if byteOffset < streamData.count {
+            scheduleInt16(streamData.subdata(in: byteOffset..<streamData.count), on: pn)
+        }
+        userPaused = false
+        pn.play()
+        streamingStarted = true
+        isPlaying = true
+        startTicker()
         syncNowPlaying()
     }
 
@@ -112,11 +156,13 @@ final class AudioPlayer: ObservableObject {
         playerNode?.stop()
         engine?.stop()
         engine = nil; playerNode = nil
-        streamingDuration = 0; streamingStarted = false; streamingFinalized = false
+        streamData = Data(); streamBaseTime = 0
+        streamingStarted = false; streamingFinalized = false
         pendingBuffers = 0; userPaused = false
 
         avPlayer?.stop()
         avPlayer = nil
+        loadedPCM = nil
         isPlaying = false
         currentTime = 0
         duration = 0
@@ -126,11 +172,14 @@ final class AudioPlayer: ObservableObject {
 
     // MARK: - Streaming
 
-    /// Call before generating the first TTS chunk.
-    func startStreaming() {
+    /// Call before generating the first TTS chunk. Pass `seeded: true` when
+    /// pre-loading already-generated audio (a regeneration), so playback doesn't
+    /// auto-start from the beginning before the caller seeks to the splice point.
+    func startStreaming(seeded: Bool = false) {
         stop()
-        streamingDuration = 0; streamingStarted = false; streamingFinalized = false
-        pendingBuffers = 0; userPaused = false
+        streamData = Data(); streamBaseTime = 0; scheduleEpoch += 1
+        streamingStarted = false; streamingFinalized = false
+        pendingBuffers = 0; userPaused = seeded
         let e = AVAudioEngine()
         let pn = AVAudioPlayerNode()
         e.attach(pn)
@@ -143,16 +192,9 @@ final class AudioPlayer: ObservableObject {
     /// `prebufferSeconds` of audio is queued (or on finalize, for shorter clips).
     func appendPCM(_ data: Data) {
         guard let pn = playerNode, engine != nil, !data.isEmpty else { return }
-        let frameCount = data.count / 2
-        guard let buf = AVAudioPCMBuffer(pcmFormat: AudioPlayer.streamFmt,
-                                         frameCapacity: AVAudioFrameCount(frameCount)) else { return }
-        buf.frameLength = AVAudioFrameCount(frameCount)
-        data.withUnsafeBytes { raw in
-            let src = raw.bindMemory(to: Int16.self)
-            let dst = buf.floatChannelData![0]
-            for i in 0..<frameCount { dst[i] = Float(src[i]) / 32768.0 }
-        }
-        enqueue(buf, pn)
+        streamData.append(data)
+        duration = Double(streamData.count) / Double(24000 * 2)
+        scheduleInt16(data, on: pn)
     }
 
     /// Schedules `seconds` of silence — used to bridge TTS underruns and to
@@ -160,26 +202,35 @@ final class AudioPlayer: ObservableObject {
     func appendSilence(_ seconds: Double) {
         guard seconds > 0, let pn = playerNode, engine != nil else { return }
         let frameCount = Int(seconds * 24000)
+        guard frameCount > 0 else { return }
+        let zeros = Data(count: frameCount * 2)
+        streamData.append(zeros)
+        duration = Double(streamData.count) / Double(24000 * 2)
+        scheduleInt16(zeros, on: pn)
+    }
+
+    /// Builds a float buffer from int16 PCM and schedules it on the node.
+    private func scheduleInt16(_ data: Data, on pn: AVAudioPlayerNode) {
+        let frameCount = data.count / 2
         guard frameCount > 0,
               let buf = AVAudioPCMBuffer(pcmFormat: AudioPlayer.streamFmt,
                                          frameCapacity: AVAudioFrameCount(frameCount)) else { return }
         buf.frameLength = AVAudioFrameCount(frameCount)
-        memset(buf.floatChannelData![0], 0, frameCount * MemoryLayout<Float>.size)
-        enqueue(buf, pn)
-    }
-
-    private func enqueue(_ buf: AVAudioPCMBuffer, _ pn: AVAudioPlayerNode) {
-        streamingDuration += Double(buf.frameLength) / 24000.0
-        duration = streamingDuration
+        data.withUnsafeBytes { raw in
+            let src = raw.bindMemory(to: Int16.self)
+            let dst = buf.floatChannelData![0]
+            for i in 0..<frameCount { dst[i] = Float(src[i]) / 32768.0 }
+        }
         pendingBuffers += 1
+        let epoch = scheduleEpoch
         pn.scheduleBuffer(buf, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, epoch == self.scheduleEpoch else { return }   // ignore stale (pre-seek) callbacks
                 self.pendingBuffers -= 1
                 self.checkStreamingComplete()
             }
         }
-        if !streamingStarted && !userPaused && streamingDuration >= Self.prebufferSeconds {
+        if !streamingStarted && !userPaused && duration >= Self.prebufferSeconds {
             startStreamingPlayback()
         }
     }
@@ -250,7 +301,8 @@ final class AudioPlayer: ObservableObject {
                     // stays true even after its queue drains.
                     if let lastRender = pn.lastRenderTime,
                        let pt = pn.playerTime(forNodeTime: lastRender) {
-                        self.currentTime = min(Double(pt.sampleTime) / pt.sampleRate, self.duration)
+                        // sampleTime resets to 0 after a seek's stop()/play(); add the seek offset.
+                        self.currentTime = min(self.streamBaseTime + Double(pt.sampleTime) / pt.sampleRate, self.duration)
                     }
                     self.syncNowPlaying()
                 } else if let p = self.avPlayer {

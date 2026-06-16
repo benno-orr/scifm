@@ -1,6 +1,9 @@
 import SwiftUI
 import UIKit
 import Vision
+import os
+
+let figLog = Logger(subsystem: "com.borr.scifm", category: "figures")
 
 struct FigurePlayerView: View {
     @EnvironmentObject var viewModel: PlayerViewModel
@@ -36,6 +39,12 @@ struct FigurePlayerView: View {
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            Button {
+                viewModel.player.pause()
+                viewModel.showPronunciationSheet = true
+            } label: {
+                Image(systemName: "character.bubble").font(.caption).foregroundColor(.secondary)
+            }
             Button { viewModel.showAPIKeySetup = true } label: {
                 Image(systemName: "gearshape").font(.caption).foregroundColor(.secondary)
             }
@@ -100,7 +109,10 @@ struct FigurePlayerView: View {
             ZStack(alignment: .bottomLeading) {
                 Group {
                     if let url = panel.imageURL {
-                        CroppedFigureImage(url: url, panelLabel: panel.label)
+                        CroppedFigureImage(url: url, panelLabel: panel.label,
+                                           figureLabels: viewModel.panels
+                                               .filter { $0.figureNumber == panel.figureNumber && !$0.label.isEmpty }
+                                               .map(\.label))
                     } else {
                         Color(.secondarySystemBackground)
                             .overlay(Image(systemName: "photo").font(.system(size: 40)).foregroundColor(.secondary))
@@ -215,10 +227,16 @@ struct SeminarCover: View {
         }
         .sheet(isPresented: $viewModel.showWebReader) {
             if let url = viewModel.pendingURL {
-                WebReaderSheet(url: url) { title, body in
-                    viewModel.processWebContent(title: title, bodyText: body)
-                }
+                WebReaderSheet(
+                    url: url,
+                    onRead: { title, body in viewModel.processWebContent(title: title, bodyText: body) },
+                    onExportDoc: { title, body in viewModel.generateDocumentFromText(title: title, bodyText: body) }
+                )
             }
+        }
+        .sheet(isPresented: $viewModel.showPronunciationSheet) {
+            PronunciationSheet(context: viewModel.currentSeminarContext)
+                .environmentObject(viewModel)
         }
     }
 
@@ -271,36 +289,45 @@ struct SeminarCover: View {
 struct CroppedFigureImage: View {
     let url: URL
     let panelLabel: String
+    let figureLabels: [String]   // all panel letters in this figure (from the legend)
 
-    @State private var full: UIImage?
     @State private var cropped: UIImage?
-    @State private var failed = false
 
     var body: some View {
-        Group {
-            if let img = cropped ?? full {
-                Image(uiImage: img).resizable().scaledToFit()
-            } else if failed {
+        ZStack {
+            // The whole figure always renders via AsyncImage (reliable).
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFit()
+                case .failure:
+                    Color(.secondarySystemBackground)
+                        .overlay(Image(systemName: "photo").font(.system(size: 40)).foregroundColor(.secondary))
+                default:
+                    Color(.secondarySystemBackground).overlay(ProgressView())
+                }
+            }
+            // When a panel crop is computed, overlay it (opaque) on top.
+            if let cropped {
                 Color(.secondarySystemBackground)
-                    .overlay(Image(systemName: "photo").font(.system(size: 40)).foregroundColor(.secondary))
-            } else {
-                Color(.secondarySystemBackground).overlay(ProgressView())
+                Image(uiImage: cropped).resizable().scaledToFit()
             }
         }
-        // Load + show the whole figure as soon as it arrives (don't wait on OCR).
-        .task(id: url) {
-            full = await FigureImageCache.shared.image(for: url)
-            failed = (full == nil)
-        }
-        // Then refine to the cropped panel in the background.
         .task(id: "\(url.absoluteString)#\(panelLabel)") {
             cropped = nil
-            guard !panelLabel.isEmpty, let f = await FigureImageCache.shared.image(for: url) else { return }
-            let labels = await FigureImageCache.shared.labelBoxes(for: url, image: f)
-            let result = FigurePanelCropper.crop(f, label: panelLabel, labelBoxes: labels)
-            // Only show a crop if it actually narrowed the figure.
-            cropped = result.size == f.size ? nil : result
+            guard !panelLabel.isEmpty else { return }
+            let expected = Set(figureLabels.compactMap { $0.lowercased().first })
+            let ocr = Self.ocrURL(url)
+            guard let img = await FigureImageCache.shared.image(for: ocr) else { return }
+            let boxes = await FigureImageCache.shared.labelBoxes(for: ocr, image: img, expected: expected)
+            if let c = FigurePanelCropper.crop(img, label: panelLabel, labelBoxes: boxes) { cropped = c }
         }
+    }
+
+    /// Higher-resolution variant of a springer image, for legible OCR + crisp crop.
+    private static func ocrURL(_ u: URL) -> URL {
+        let s = u.absoluteString.replacingOccurrences(of: #"/lw\d+/"#, with: "/lw1500/", options: .regularExpression)
+        return URL(string: s) ?? u
     }
 }
 
@@ -314,32 +341,33 @@ struct LabelBox { let char: Character; let rect: CGRect }
 final class FigureImageCache {
     static let shared = FigureImageCache()
     private let cache = NSCache<NSURL, UIImage>()
-    private var inflight: [URL: Task<UIImage?, Never>] = [:]
     private var labels: [URL: [LabelBox]] = [:]
 
     func image(for url: URL) async -> UIImage? {
         if let hit = cache.object(forKey: url as NSURL) { return hit }
-        if let task = inflight[url] { return await task.value }
-        let task = Task<UIImage?, Never> {
-            var req = URLRequest(url: url)
-            req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
-                         forHTTPHeaderField: "User-Agent")
-            req.timeoutInterval = 30
-            guard let (data, _) = try? await URLSession.shared.data(for: req),
-                  let img = UIImage(data: data) else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                     forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 30
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            guard let img = UIImage(data: data) else {
+                figLog.log("img DECODE FAIL \(url.absoluteString, privacy: .public) bytes=\(data.count)")
+                return nil
+            }
+            cache.setObject(img, forKey: url as NSURL)
+            figLog.log("img OK \(url.absoluteString, privacy: .public) \(Int(img.size.width))x\(Int(img.size.height))")
             return img
+        } catch {
+            figLog.log("img LOAD FAIL \(url.absoluteString, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
+            return nil
         }
-        inflight[url] = task
-        let img = await task.value
-        inflight[url] = nil
-        if let img { cache.setObject(img, forKey: url as NSURL) }
-        return img
     }
 
-    /// OCR'd single-letter panel labels for an image, computed once and cached.
-    func labelBoxes(for url: URL, image: UIImage) async -> [LabelBox] {
+    /// OCR'd positions of the figure's known panel letters, computed once + cached.
+    func labelBoxes(for url: URL, image: UIImage, expected: Set<Character>) async -> [LabelBox] {
         if let hit = labels[url] { return hit }
-        let found = await FigurePanelCropper.detectLabels(in: image)
+        let found = await FigurePanelCropper.detectLabels(in: image, expected: expected)
         labels[url] = found
         return found
     }
@@ -349,34 +377,58 @@ final class FigureImageCache {
 /// Vision OCR, then crop the region from that letter to its right/below
 /// neighbours. Best-effort — falls back to the whole figure when unsure.
 enum FigurePanelCropper {
-    /// Detects isolated single-letter labels and returns their pixel rects
-    /// (top-left origin). Runs OCR off the main thread.
-    static func detectLabels(in image: UIImage) async -> [LabelBox] {
-        guard let cg = image.cgImage else { return [] }
+    /// Locates the figure's known panel letters (`expected`) in the image and
+    /// returns one pixel rect per letter (top-left origin). Runs OCR off-main.
+    static func detectLabels(in image: UIImage, expected: Set<Character>) async -> [LabelBox] {
+        guard let cg = image.cgImage, !expected.isEmpty else { return [] }
         let W = CGFloat(cg.width), H = CGFloat(cg.height)
         return await Task.detached(priority: .userInitiated) {
             let req = VNRecognizeTextRequest()
             req.recognitionLevel = .accurate
             req.usesLanguageCorrection = false
+            req.recognitionLanguages = ["en-US"]
+            req.minimumTextHeight = 0.008
             let handler = VNImageRequestHandler(cgImage: cg, options: [:])
             try? handler.perform([req])
-            var out: [LabelBox] = []
+
+            var candidates: [LabelBox] = []
             for obs in (req.results ?? []) {
-                guard let cand = obs.topCandidates(1).first else { continue }
-                let t = cand.string.trimmingCharacters(in: .whitespaces)
-                let letters = t.filter { $0.isLetter }
-                guard t.count <= 2, letters.count == 1, let ch = letters.first else { continue }
-                let b = obs.boundingBox    // normalized, origin bottom-left
-                let rect = CGRect(x: b.minX * W, y: (1 - b.maxY) * H, width: b.width * W, height: b.height * H)
-                out.append(LabelBox(char: Character(ch.lowercased()), rect: rect))
+                for cand in obs.topCandidates(3) {
+                    let t = cand.string.trimmingCharacters(in: .whitespaces)
+                    // Panel marker: an expected letter standing alone or leading a
+                    // clause ("a", "a.", "a Schematic of…").
+                    guard let ch = t.first, ch.isLetter else { continue }
+                    let lower = Character(ch.lowercased())
+                    guard expected.contains(lower) else { continue }
+                    if t.count > 1 {
+                        let second = t[t.index(after: t.startIndex)]
+                        if second.isLetter || second.isNumber { continue }
+                    }
+                    let b = obs.boundingBox
+                    candidates.append(LabelBox(char: lower,
+                                               rect: CGRect(x: b.minX * W, y: (1 - b.maxY) * H,
+                                                            width: b.width * W, height: b.height * H)))
+                    break
+                }
             }
-            return out
+            // Keep the topmost-leftmost occurrence of each letter (the panel label
+            // rather than an incidental letter elsewhere in the figure).
+            var best: [Character: LabelBox] = [:]
+            for lb in candidates {
+                if let e = best[lb.char],
+                   !(lb.rect.minY < e.rect.minY || (lb.rect.minY == e.rect.minY && lb.rect.minX < e.rect.minX)) {
+                    continue
+                }
+                best[lb.char] = lb
+            }
+            return Array(best.values)
         }.value
     }
 
-    static func crop(_ image: UIImage, label: String, labelBoxes: [LabelBox]) -> UIImage {
+    /// Crops to the panel for `label`, or nil if it can't be located/sized.
+    static func crop(_ image: UIImage, label: String, labelBoxes: [LabelBox]) -> UIImage? {
         guard let cg = image.cgImage, let target = label.lowercased().first, !labelBoxes.isEmpty
-        else { return image }
+        else { return nil }
         let W = CGFloat(cg.width), H = CGFloat(cg.height)
 
         // Pick the topmost-leftmost occurrence of this letter (panel labels sit at
@@ -384,7 +436,7 @@ enum FigurePanelCropper {
         let matches = labelBoxes.filter { $0.char == target }.sorted {
             $0.rect.minY != $1.rect.minY ? $0.rect.minY < $1.rect.minY : $0.rect.minX < $1.rect.minX
         }
-        guard let lab = matches.first else { return image }
+        guard let lab = matches.first else { return nil }
         let lx = lab.rect.minX, ly = lab.rect.minY
         let rowTol = H * 0.05
 
@@ -404,7 +456,7 @@ enum FigurePanelCropper {
                           height: min(bottomBound, H) - y0).integral
         // Don't crop to a sliver — require a sensible region.
         guard rect.width > W * 0.1, rect.height > H * 0.1, let sub = cg.cropping(to: rect)
-        else { return image }
+        else { return nil }
         return UIImage(cgImage: sub, scale: image.scale, orientation: image.imageOrientation)
     }
 }

@@ -19,7 +19,24 @@ enum ScientificPronunciation {
             result = re.stringByReplacingMatches(in: result, range: range, withTemplate: "interleukin $1")
         }
 
+        // User dictionary (added live while listening) — applied last so listeners
+        // can override anything the built-in rules didn't catch. Case-insensitive,
+        // whole-word.
+        for entry in UserPronunciationData.all() {
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: entry.word) + "\\b"
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            let template = NSRegularExpression.escapedTemplate(for: entry.replacement)
+            result = re.stringByReplacingMatches(in: result, range: range, withTemplate: template)
+        }
+
         return result
+    }
+
+    /// A paste-ready `substitutions` line for promoting a user entry into the
+    /// global hardcoded list (used by the debug dictionary export).
+    static func swiftLine(word: String, replacement: String) -> String {
+        "(\"\\\\b\(word)\\\\b\", \"\(replacement)\"),"
     }
 
     // (pattern, replacement) — plain NSRegularExpression patterns, no backreferences
@@ -67,7 +84,14 @@ enum ScientificPronunciation {
         ("\\bCas9\\b",   "Cas 9"),
         ("\\bCas12\\b",  "Cas 12"),
 
+        // ── Chromatin / complexes ──
+        ("\\bSWI/SNF\\b", "switch snif"),
+
         // ── Signaling pathways ──
+        ("\\bβ-?catenin\\b",    "beta catenin"),
+        ("\\bbeta-catenin\\b",  "beta catenin"),
+        ("\\bWNT\\b",      "wint"),
+        ("\\bWnt\\b",      "wint"),
         ("\\bJAK-STAT\\b", "jack stat"),
         ("\\bJAK\\b",      "jack"),
         ("\\bSTAT\\b",     "stat"),
@@ -91,6 +115,11 @@ enum ScientificPronunciation {
         ("\\bHER4\\b", "H E R 4"),
         ("\\bTNF\\b",  "T N F"),
         ("\\bIFN\\b",  "I F N"),
+        // TGF-β (Greek beta or spelled "beta", optional hyphen, isoform 1–3) → "T G F beta …"
+        ("\\bTGF-?(?:β|beta)1\\b", "T G F beta 1"),
+        ("\\bTGF-?(?:β|beta)2\\b", "T G F beta 2"),
+        ("\\bTGF-?(?:β|beta)3\\b", "T G F beta 3"),
+        ("\\bTGF-?(?:β|beta)\\b",  "T G F beta"),
         ("\\bTGF\\b",  "T G F"),
 
         // ── Tumor suppressors / oncogenes ──
@@ -102,6 +131,7 @@ enum ScientificPronunciation {
         ("\\bp16\\b",   "P 16"),
 
         // ── Energy / metabolites ──
+        ("\\bOXPHOS\\b", "ox phos"),
         ("\\bNADPH\\b", "N A D P H"),
         ("\\bNADH\\b",  "N A D H"),
         ("\\bATP\\b",   "A T P"),
