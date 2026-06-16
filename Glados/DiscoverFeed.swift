@@ -74,11 +74,8 @@ actor FeedManager {
             rssURL: URL(string: "https://feeds.nature.com/nbt/rss/current")!,
             urlMustContain: nil, dcTypesAllowed: nil
         ),
-        FeedSource(
-            name: "Cell", label: "Article",
-            rssURL: URL(string: "https://www.cell.com/cell/rss")!,
-            urlMustContain: nil, dcTypesAllowed: nil
-        ),
+        // Cell Reviews are scraped from the issue TOC (scrapeCellReviews) — Cell's
+        // RSS feeds don't expose the Review section, so they're added separately.
         FeedSource(
             name: "Science", label: "Review",
             rssURL: URL(string: "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science")!,
@@ -99,10 +96,11 @@ actor FeedManager {
             urlMustContain: nil,
             dcTypesAllowed: ["Feature", "Perspective"]
         ),
-        // Cell eTOC — URLSession bypasses the Cloudflare challenge curl hits
+        // Cell current-issue eTOC — URLSession bypasses the Cloudflare challenge
+        // curl hits. (`/cell/rss` is just an HTML list-of-feeds page, not a feed.)
         FeedSource(
             name: "Cell", label: "Highlights",
-            rssURL: URL(string: "https://www.cell.com/cell/rss")!,
+            rssURL: URL(string: "https://www.cell.com/cell/current.rss")!,
             urlMustContain: nil,
             dcTypesAllowed: nil
         ),
@@ -112,6 +110,7 @@ actor FeedManager {
 
     func fetchReviews() async -> [FeedArticle] {
         await withTaskGroup(of: [FeedArticle].self) { group in
+            group.addTask { await self.scrapeCellReviews() }
             for source in reviewSources {
                 group.addTask { await self.fetch(source: source) }
             }
@@ -119,6 +118,109 @@ actor FeedManager {
             for await articles in group { all.append(contentsOf: articles) }
             return all.sorted { ($0.publishedDate ?? .distantPast) > ($1.publishedDate ?? .distantPast) }
         }
+    }
+
+    // MARK: - Cell Reviews (issue-TOC scrape)
+
+    /// How many recent Cell issues to scrape for reviews (Cell's RSS doesn't carry
+    /// the Review section, and each issue typically has 0–1 reviews).
+    private static let cellReviewIssueCount = 6
+
+    /// Cell publishes Reviews in each issue's table of contents but not in any of
+    /// its RSS feeds, so we scrape the "Review" section of the last several issues
+    /// directly. Returns the review articles labelled "Review", dated per issue.
+    func scrapeCellReviews() async -> [FeedArticle] {
+        let piis = await cellRecentIssuePIIs()
+        return await withTaskGroup(of: [FeedArticle].self) { group in
+            for pii in piis.prefix(Self.cellReviewIssueCount) {
+                group.addTask { await self.cellIssueReviews(pii: pii) }
+            }
+            var all: [FeedArticle] = []
+            var seen = Set<String>()
+            for await batch in group {
+                for a in batch where !seen.contains(a.id) { seen.insert(a.id); all.append(a) }
+            }
+            return all
+        }
+    }
+
+    /// Recent Cell issue PIIs, newest first, from the issues archive page.
+    private func cellRecentIssuePIIs() async -> [String] {
+        guard let url = URL(string: "https://www.cell.com/cell/issues") else { return [] }
+        var request = URLRequest(url: url)
+        request.setValue(Self.iPhoneUA, forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        else { return [] }
+        var out: [String] = []
+        var seen = Set<String>()
+        var rest = Substring(html)
+        while let a = rest.range(of: "issue?pii=") {
+            rest = rest[a.upperBound...]
+            guard let b = rest.range(of: "\"") else { break }
+            let pii = String(rest[..<b.lowerBound])
+            rest = rest[b.upperBound...]
+            if !pii.isEmpty, !seen.contains(pii) { seen.insert(pii); out.append(pii) }
+        }
+        return out
+    }
+
+    /// Scrapes one Cell issue's "Review" section (bounded by the next TOC section).
+    private func cellIssueReviews(pii: String) async -> [FeedArticle] {
+        guard let url = URL(string: "https://www.cell.com/cell/issue?pii=\(pii)") else { return [] }
+        var request = URLRequest(url: url)
+        request.setValue(Self.iPhoneUA, forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        else { return [] }
+
+        let ns = html as NSString
+        guard let headRE = try? NSRegularExpression(pattern: "toc__section[^>]*>(.*?)</",
+                                                    options: [.dotMatchesLineSeparators]) else { return [] }
+        let heads = headRE.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        let itemRE = try? NSRegularExpression(
+            pattern: "toc__item__title\"><a href=\"(/cell/fulltext/[^\"]+)\">(.*?)</a>",
+            options: [.dotMatchesLineSeparators])
+
+        // Issue cover date, for sorting alongside the dated RSS reviews.
+        let issueDate = Self.firstGroup(#"([A-Z][a-z]{2,8} \d{1,2}, 20\d\d)"#, html).flatMap(Self.parseCellDate)
+
+        var out: [FeedArticle] = []
+        var seen = Set<String>()
+        for (i, m) in heads.enumerated() {
+            let name = ns.substring(with: m.range(at: 1))
+                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Bound the section by the next section heading, then pull its items.
+            guard name.range(of: "^Reviews?$", options: [.regularExpression, .caseInsensitive]) != nil else { continue }
+            let segStart = m.range.location + m.range.length
+            let segEnd = i + 1 < heads.count ? heads[i + 1].range.location : ns.length
+            let body = ns.substring(with: NSRange(location: segStart, length: segEnd - segStart))
+            let bns = body as NSString
+            for im in itemRE?.matches(in: body, range: NSRange(location: 0, length: bns.length)) ?? [] {
+                let path = bns.substring(with: im.range(at: 1))
+                guard !seen.contains(path) else { continue }
+                seen.insert(path)
+                let title = Self.decodeEntities(bns.substring(with: im.range(at: 2))
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !title.isEmpty, let articleURL = URL(string: "https://www.cell.com\(path)") else { continue }
+                out.append(FeedArticle(
+                    id: path, title: title, summary: "", url: articleURL,
+                    source: "Cell", label: "Review", publishedDate: issueDate, doi: nil))
+            }
+        }
+        return out
+    }
+
+    private static func parseCellDate(_ s: String) -> Date? {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        for fmt in ["MMM d, yyyy", "MMMM d, yyyy"] {
+            f.dateFormat = fmt
+            if let d = f.date(from: s) { return d }
+        }
+        return nil
     }
 
     func fetchAll() async -> [FeedArticle] {
@@ -190,7 +292,7 @@ actor FeedManager {
         ),
         FeedSource(
             name: "Cell", label: "Article",
-            rssURL: URL(string: "https://www.cell.com/cell/rss")!,
+            rssURL: URL(string: "https://www.cell.com/cell/current.rss")!,
             urlMustContain: nil, dcTypesAllowed: nil
         ),
     ]
