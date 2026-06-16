@@ -7,7 +7,7 @@ struct LibraryListView: View {
     @State private var items: [LibraryItem] = []
     @State private var filter: Filter = .reading
 
-    enum Filter: String, CaseIterable { case reading = "Reading", read = "Read", saved = "Saved" }
+    enum Filter: String, CaseIterable { case reading = "Reading", read = "Read", saved = "Seminars" }
 
     // Seminars live in their own Saved section; Reading/Read are the narration docs.
     private var shown: [LibraryItem] {

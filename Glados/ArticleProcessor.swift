@@ -307,12 +307,8 @@ actor ArticleProcessor {
         }
 
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
-        let firstFig = allPanels.first?.figureNumber ?? 1
-        let intro = introBeforeFirstFigure(in: raw.bodyText, figureNumber: firstFig)
-        var timeline: [FigurePanel] = []
-        if let s = await textSection(title: "Introduction", text: intro) { timeline.append(s) }
-        timeline.append(contentsOf: allPanels)
-        return ProcessedFigures(title: raw.title, panels: timeline)
+        // Start at Figure 1 (no intro section).
+        return ProcessedFigures(title: raw.title, panels: allPanels)
     }
 
     private func figureImageURL(href: String, pmcid: String) -> URL? {
@@ -375,15 +371,11 @@ actor ArticleProcessor {
         }
 
         guard !allPanels.isEmpty else { throw ArticleError.figuresUnavailable }
-        // Abstract is extracted only to exclude it from the intro (we don't
-        // narrate it as a section). Timeline = Introduction → figures → Discussion.
-        let abstract = abstractFromHTML(html)
-        let intro = introParagraphsFromHTML(html, excludingAbstract: abstract)
-        let discussion = discussionParagraphsFromHTML(html)
-        var timeline: [FigurePanel] = []
-        if let s = await textSection(title: "Introduction", text: intro) { timeline.append(s) }
-        timeline.append(contentsOf: allPanels)
-        if let s = await textSection(title: "Discussion", text: discussion) { timeline.append(s) }
+        // Start at Figure 1; append a Discussion section after the figures.
+        var timeline = allPanels
+        if let s = await textSection(title: "Discussion", text: discussionParagraphsFromHTML(html)) {
+            timeline.append(s)
+        }
         return ProcessedFigures(title: title, panels: timeline)
     }
 
@@ -603,11 +595,11 @@ actor ArticleProcessor {
             // Springer serves WebP via "?as=webp", which AsyncImage decodes
             // unreliably; drop it so the original PNG/JPG is returned instead.
             if let r = s.range(of: "?as=webp") { s = String(s[..<r.lowerBound]) }
-            // Bump springer thumbnails to a larger size so panel letters are
-            // legible and OCR can locate them for per-panel cropping.
+            // Normalise springer images to a small, fast display size (PNG). A
+            // larger version is fetched separately, only for OCR-based cropping.
             if s.contains("media.springernature.com") {
-                s = s.replacingOccurrences(of: #"/lw\d+/"#, with: "/lw1500/", options: .regularExpression)
-                     .replacingOccurrences(of: "/full/", with: "/lw1500/")
+                s = s.replacingOccurrences(of: #"/lw\d+/"#, with: "/lw685/", options: .regularExpression)
+                     .replacingOccurrences(of: "/full/", with: "/lw685/")
             }
             let lower = s.lowercased()
             if lower.hasPrefix("data:") || lower.contains(".svg") { continue }
