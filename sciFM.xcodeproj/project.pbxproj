@@ -36,6 +36,7 @@
 		BBE8B5E314197FA39AFB52E0 /* Library.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F966D91E473E8D73E03A027 /* Library.swift */; };
 		C85344162D5CCB3ABFFE51A1 /* AudioStreamPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84722524C70A8D13CE3F521F /* AudioStreamPlayer.swift */; };
 		CD267A79268A02D7DC9F2D86 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 98E3CEEC3C7216830B549057 /* Security.framework */; };
+		CE5B87E404EF7E1B854386D5 /* PanelLetterAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F398ED94ED7D5AF5A56B8E74 /* PanelLetterAgent.swift */; };
 		CF3AFBE8A5198F840200BA85 /* Pronunciations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D7C4A0221EB08D2D4F9598 /* Pronunciations.swift */; };
 		D45BCAE3773379AA6F106DF4 /* LLMCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F72AE2010087940807EFC09 /* LLMCleaner.swift */; };
 		D9D37FB1E649FCC97DFA0BA0 /* AudioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31CCD5EBF92A22A759AEB54D /* AudioTests.swift */; };
@@ -115,6 +116,7 @@
 		D0DF7CBD8CB4FA95A70FF5DA /* DiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverView.swift; sourceTree = "<group>"; };
 		D4E2AC3B72F1133048626E1F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D777C0B25E8DED5EC21DBA59 /* WebReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebReaderView.swift; sourceTree = "<group>"; };
+		F398ED94ED7D5AF5A56B8E74 /* PanelLetterAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelLetterAgent.swift; sourceTree = "<group>"; };
 		F50F6334ED98ABA6E5DB2280 /* ReviewsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewsView.swift; sourceTree = "<group>"; };
 		FFE24A8ED78B2C40D683159A /* ArticleProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleProcessor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -165,6 +167,7 @@
 				554B1048EAE3F704FD6F0771 /* LibraryView.swift */,
 				4F72AE2010087940807EFC09 /* LLMCleaner.swift */,
 				5C07746AF0FE25C394090913 /* OpenAITTS.swift */,
+				F398ED94ED7D5AF5A56B8E74 /* PanelLetterAgent.swift */,
 				B3530788BDD8A080B1D77D39 /* PaperAudioApp.swift */,
 				72A2C0870C146A713CC0D2E1 /* PapersView.swift */,
 				910253EF658C9215D2A815DF /* PlayerView.swift */,
@@ -365,6 +368,7 @@
 				BBE8B5E314197FA39AFB52E0 /* Library.swift in Sources */,
 				ED246718C814B904359FBC4B /* LibraryView.swift in Sources */,
 				8B88AE85C5A70153A795F243 /* OpenAITTS.swift in Sources */,
+				CE5B87E404EF7E1B854386D5 /* PanelLetterAgent.swift in Sources */,
 				4E019BC885AD69F438816725 /* PaperAudioApp.swift in Sources */,
 				934A44AE4D27FA58EA70D10D /* PapersView.swift in Sources */,
 				77C483F0CBF5E27480B0FB01 /* PlayerView.swift in Sources */,

@@ -30,7 +30,7 @@ struct SciFMApp: App {
                     .tag(3)
 
                 SeminarDebugView()
-                    .tabItem { Label("Seminar Debug", systemImage: "ladybug") }
+                    .tabItem { Label("Debug", systemImage: "ladybug") }
                     .tag(4)
             }
             .environmentObject(playerViewModel)

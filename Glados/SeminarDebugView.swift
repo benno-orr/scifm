@@ -1,12 +1,13 @@
 import SwiftUI
 import UIKit
 
-// MARK: - Seminar Debug tab
+// MARK: - Debug tab
 //
-// A developer tool for inspecting the figure pipeline: load any paper URL, then
-// page through its figures one at a time with the OCR-recognized panel letters
-// (the same detection the auto-cropper uses) underlined in place. Lets us see at
-// a glance which panel labels Vision finds vs. the labels the legend expects.
+// A developer tool for inspecting the figure pipeline. Load a paper by URL, or
+// pick one already saved in the Library, then page through its figures with the
+// OCR-recognized panel letters underlined in place. Each figure can also be sent
+// to the panel-letter agent (Claude vision) to compare what the LLM reads vs. the
+// legend's labels and Vision's OCR.
 
 /// One whole figure for the debug view: its image plus the panel letters the
 /// legend says it should contain.
@@ -24,6 +25,7 @@ struct SeminarDebugView: View {
     @State private var status = ""
     @State private var loading = false
     @State private var showPronunciations = false
+    @State private var savedItems: [LibraryItem] = []
 
     private let processor = ArticleProcessor()
 
@@ -50,7 +52,7 @@ struct SeminarDebugView: View {
                     pager
                 } else if !loading {
                     Spacer()
-                    Text("Enter a paper URL to inspect its figures and the panel letters Vision detects.")
+                    Text("Load a paper by URL, or pick a saved one, to inspect its figures — Vision OCR underlines, and the panel-letter agent reads each figure.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -59,9 +61,10 @@ struct SeminarDebugView: View {
                 }
             }
             .charcoalBackdrop()
-            .navigationTitle("Seminar Debug")
+            .navigationTitle("Debug")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { savedMenu }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showPronunciations = true } label: {
                         Image(systemName: "character.book.closed")
@@ -69,6 +72,22 @@ struct SeminarDebugView: View {
                 }
             }
             .sheet(isPresented: $showPronunciations) { PronunciationManagerView() }
+            .onAppear { Task { await loadSavedItems() } }
+        }
+    }
+
+    /// Menu of locally-saved seminars (papers with stored figure panels).
+    private var savedMenu: some View {
+        Menu {
+            if savedItems.isEmpty {
+                Text("No saved papers")
+            } else {
+                ForEach(savedItems) { item in
+                    Button(item.title) { loadSaved(item) }
+                }
+            }
+        } label: {
+            Image(systemName: "tray.full")
         }
     }
 
@@ -137,6 +156,22 @@ struct SeminarDebugView: View {
         }
     }
 
+    private func loadSavedItems() async {
+        savedItems = await LibraryManager.shared.loadAll()
+            .filter { $0.contentKind == .seminar && ($0.panels?.isEmpty == false) }
+    }
+
+    /// Loads a saved seminar's stored figures (built offline from its panels).
+    private func loadSaved(_ item: LibraryItem) {
+        status = ""
+        index = 0
+        let grouped = Self.group(stored: item.panels ?? [])
+        figures = grouped
+        status = grouped.isEmpty
+            ? "“\(item.title)” has no figures with images."
+            : "\(item.title) · \(grouped.count) figure(s)."
+    }
+
     /// Collapses the per-panel timeline into one entry per figure: a single image
     /// and the union of the panel letters the legend lists for that figure.
     private static func group(_ panels: [FigurePanel]) -> [DebugFigure] {
@@ -144,6 +179,23 @@ struct SeminarDebugView: View {
         for p in panels where !p.isTextSection {
             var e = byFigure[p.figureNumber] ?? (nil, [], p.figureTitle)
             if e.url == nil { e.url = p.imageURL }
+            if !p.label.isEmpty, !e.labels.contains(p.label) { e.labels.append(p.label) }
+            byFigure[p.figureNumber] = e
+        }
+        return byFigure
+            .sorted { $0.key < $1.key }
+            .compactMap { num, v in
+                guard let url = v.url else { return nil }
+                return DebugFigure(id: num, imageURL: url, expectedLabels: v.labels, title: v.title)
+            }
+    }
+
+    /// Same as `group`, but from a saved seminar's stored panels.
+    private static func group(stored panels: [StoredPanel]) -> [DebugFigure] {
+        var byFigure: [Int: (url: URL?, labels: [String], title: String)] = [:]
+        for p in panels where p.figureNumber > 0 {
+            var e = byFigure[p.figureNumber] ?? (nil, [], p.figureTitle)
+            if e.url == nil { e.url = p.imageURL.flatMap { URL(string: $0) } }
             if !p.label.isEmpty, !e.labels.contains(p.label) { e.labels.append(p.label) }
             byFigure[p.figureNumber] = e
         }
@@ -166,6 +218,8 @@ private struct LabeledFigureView: View {
     @State private var image: UIImage?
     @State private var boxes: [LabelBox] = []
     @State private var detail = "Loading…"
+    @State private var agentLetters: [String]?
+    @State private var agentRunning = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -207,8 +261,41 @@ private struct LabeledFigureView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
+
+            agentRow
         }
         .task { await load() }
+    }
+
+    @ViewBuilder
+    private var agentRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                Task { await runAgent() }
+            } label: {
+                Label(agentRunning ? "Asking Claude…" : "Identify panels (Claude)",
+                      systemImage: "sparkles")
+                    .font(.caption2)
+            }
+            .disabled(image == nil || agentRunning)
+
+            if agentRunning { ProgressView().scaleEffect(0.7) }
+
+            if let agentLetters {
+                Text("Agent: \(agentLetters.isEmpty ? "none" : agentLetters.map { $0.uppercased() }.joined(separator: " "))")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(.purple)
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func runAgent() async {
+        guard let image else { return }
+        agentRunning = true
+        let result = await PanelLetterAgent.shared.identifyPanels(in: image)
+        agentLetters = result?.panels ?? []
+        agentRunning = false
     }
 
     private func load() async {
