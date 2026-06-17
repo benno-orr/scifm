@@ -25,6 +25,8 @@ final class PlayerViewModel: ObservableObject {
     @Published var mode: AppMode = .narration
     /// Drives the full-screen seminar cover presented over the whole app.
     @Published var showSeminar = false
+    /// Set to route the Debug tab to a paper's figures (e.g. from Seminarize).
+    @Published var debugFigureURL: URL? = nil
     @Published var exportMarkdown: String = ""
     @Published var featuredImageURL: URL? = nil
     // Narration mode
@@ -129,6 +131,13 @@ final class PlayerViewModel: ObservableObject {
     func dismissSeminar() {
         showSeminar = false
         if status == .failed { dismissFailure() }
+    }
+
+    /// Cancels an in-progress seminar: aborts generation, stops audio, and
+    /// dismisses the cover.
+    func cancelSeminar() {
+        stop()
+        showSeminar = false
     }
 
     /// Progress text shown on the seminar cover while it generates.
@@ -1129,7 +1138,8 @@ struct PlayerView: View {
     }
 
     private func currency(_ v: Double) -> String {
-        v.formatted(.currency(code: "USD").precision(.fractionLength(v < 1 ? 3 : 2)))
+        // Plain "$" — avoid the locale-dependent "US$" prefix that .currency adds.
+        "$" + v.formatted(.number.precision(.fractionLength(v < 1 ? 3 : 2)))
     }
 
     // MARK: - Ready layout
@@ -1325,6 +1335,18 @@ struct PlayerView: View {
 
             statusLabel
 
+            if viewModel.errorMessage == nil && viewModel.status != .failed {
+                Button { viewModel.stop() } label: {
+                    Text("Cancel")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 9)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(10)
+                }
+            }
+
             if let error = viewModel.errorMessage {
                 Text(error)
                     .font(.caption)
@@ -1371,6 +1393,8 @@ struct PlayerView: View {
                 .foregroundColor(.secondary)
         }
         .font(.subheadline.monospacedDigit())
+        .lineLimit(1)
+        .fixedSize()   // show the full spend; don't clip/constrain it
     }
 
     @State private var pastedURL = ""

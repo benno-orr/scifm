@@ -269,6 +269,12 @@ struct SeminarCover: View {
             } else {
                 ProgressView().scaleEffect(1.6)
                 Text(viewModel.seminarStatusText).font(.subheadline).foregroundColor(.secondary)
+                Button { viewModel.cancelSeminar() } label: {
+                    Text("Cancel")
+                        .font(.subheadline).foregroundColor(.secondary)
+                        .padding(.horizontal, 22).padding(.vertical, 9)
+                        .background(Color(.secondarySystemBackground)).cornerRadius(10)
+                }
             }
 
             if !viewModel.articleTitle.isEmpty {

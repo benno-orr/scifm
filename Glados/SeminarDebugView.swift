@@ -19,6 +19,7 @@ private struct DebugFigure: Identifiable {
 }
 
 struct SeminarDebugView: View {
+    @EnvironmentObject var viewModel: PlayerViewModel
     @State private var urlText = ""
     @State private var figures: [DebugFigure] = []
     @State private var index = 0
@@ -26,6 +27,8 @@ struct SeminarDebugView: View {
     @State private var loading = false
     @State private var showPronunciations = false
     @State private var savedItems: [LibraryItem] = []
+    /// When arriving via Seminarize, auto-run the agent on the first figure.
+    @State private var autoRun = false
 
     private let processor = ArticleProcessor()
 
@@ -46,7 +49,7 @@ struct SeminarDebugView: View {
                 }
 
                 if !figures.isEmpty {
-                    LabeledFigureView(figure: figures[index])
+                    LabeledFigureView(figure: figures[index], autoRunAgent: autoRun && index == 0)
                         .id(figures[index].id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     pager
@@ -72,8 +75,23 @@ struct SeminarDebugView: View {
                 }
             }
             .sheet(isPresented: $showPronunciations) { PronunciationManagerView() }
-            .onAppear { Task { await loadSavedItems() } }
+            .onAppear {
+                Task { await loadSavedItems() }
+                consumeDebugRequest()   // handle a request set before this tab existed
+            }
+            .onChange(of: index) { _, _ in autoRun = false }
+            .onChange(of: viewModel.debugFigureURL) { _, _ in consumeDebugRequest() }
         }
+    }
+
+    /// If Seminarize (or anything) requested a figure URL, load it here and
+    /// auto-run the agent on the first figure.
+    private func consumeDebugRequest() {
+        guard let url = viewModel.debugFigureURL else { return }
+        urlText = url.absoluteString
+        autoRun = true
+        loadFigures()
+        viewModel.debugFigureURL = nil
     }
 
     /// Menu of locally-saved seminars (papers with stored figure panels).
@@ -214,6 +232,7 @@ struct SeminarDebugView: View {
 /// letter in place (mapping Vision's pixel rects onto the displayed image).
 private struct LabeledFigureView: View {
     let figure: DebugFigure
+    var autoRunAgent: Bool = false
 
     @State private var image: UIImage?
     @State private var boxes: [LabelBox] = []
@@ -314,6 +333,7 @@ private struct LabeledFigureView: View {
         let expectedChars = figure.expectedLabels.map { $0.uppercased() }.joined(separator: " ")
         detail = "Expected: \(expectedChars.isEmpty ? "—" : expectedChars)   ·   "
             + "Found: \(foundChars.isEmpty ? "none" : foundChars)"
+        if autoRunAgent { await runAgent() }
     }
 
     /// Higher-resolution springer variant for legible OCR (mirrors CroppedFigureImage).
