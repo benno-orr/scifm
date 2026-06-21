@@ -342,7 +342,7 @@ private struct LabeledFigureView: View {
             return LabelBox(char: ch, rect: CGRect(x: p.box.minX * W, y: p.box.minY * H,
                                                    width: p.box.width * W, height: p.box.height * H))
         }
-        rects = PanelGeometry.resolvedRects(boxes: boxes, image: image)
+        rects = PanelGeometry.panelRects(boxes: boxes, image: image)
         crops = PanelGeometry.crops(image: image, boxes: boxes, rects: rects)
         let agentChars = boxes.map { String($0.char) }.joined(separator: " ")
         detail = "Agent: \(agentChars.isEmpty ? "none" : agentChars)   ·   Legend: \(legendChars)"
@@ -354,7 +354,7 @@ private struct LabeledFigureView: View {
         let expected = Set(figure.expectedLabels.compactMap { $0.lowercased().first })
         let found = await FigurePanelCropper.detectLabels(in: image, expected: expected)
         boxes = found
-        rects = PanelGeometry.resolvedRects(boxes: found, image: image)
+        rects = PanelGeometry.panelRects(boxes: found, image: image)
         crops = PanelGeometry.crops(image: image, boxes: found, rects: rects)
         let foundChars = found.map { String($0.char) }.sorted().joined(separator: " ")
         detail = "OCR: \(foundChars.isEmpty ? "none" : foundChars)   ·   Legend: \(legendChars)"
@@ -403,9 +403,9 @@ enum PanelGeometry {
                       && $0.rect.minX < rightBound - W * 0.01 }
             .map { $0.rect.minY }.min() ?? H
 
-        // Margin above/left of the label, scaled to the letter, so the whole
-        // label is captured (some detection boxes undershoot its top) with room.
-        let pad = max(box.rect.height, min(W, H) * 0.012)
+        // Generous margin above/left of the label (~half inch) so the whole label
+        // is captured even when a detection box undershoots its top corner.
+        let pad = max(box.rect.height * 1.5, min(W, H) * 0.04)
         let x0 = max(0, lx - pad)
         let y0 = max(0, ly - pad)
         return CGRect(x: x0, y: y0,
@@ -430,15 +430,13 @@ enum PanelGeometry {
         }
     }
 
-    /// Panel rects for each label, with significant overlaps resolved by content
-    /// (the shared region goes to the panel it resembles).
-    static func resolvedRects(boxes: [LabelBox], image: UIImage) -> [CGRect] {
-        let raw = boxes.map { panelRect(for: $0, among: boxes, imageSize: image.size) }
-        guard let grid = ColorGrid(image) else { return raw }
-        return resolvePanelOverlaps(raw, grid: grid)
+    /// Panel rects for each label. These may overlap — each label simply owns the
+    /// region from itself to the next label (right/down) or the page edge.
+    static func panelRects(boxes: [LabelBox], image: UIImage) -> [CGRect] {
+        boxes.map { panelRect(for: $0, among: boxes, imageSize: image.size) }
     }
 
-    /// One cropped panel per detected letter (from resolved rects), with its color.
+    /// One cropped panel per detected letter, with its color.
     static func crops(image: UIImage, boxes: [LabelBox], rects: [CGRect])
         -> [(char: Character, color: Color, image: UIImage)] {
         zip(boxes, rects).enumerated().compactMap { i, pair in
@@ -475,10 +473,6 @@ private struct PanelOverlay: View {
                         .stroke(color, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
                         .frame(width: panelR.width, height: panelR.height)
                         .position(x: panelR.midX, y: panelR.midY)
-                    Rectangle()
-                        .stroke(color, lineWidth: 2)
-                        .frame(width: letterR.width, height: letterR.height)
-                        .position(x: letterR.midX, y: letterR.midY)
                     // The letter, recolored in place on top of the figure's letter.
                     Text(String(box.char))
                         .font(.system(size: max(12, letterR.height), weight: .bold))
@@ -615,7 +609,7 @@ private struct PDFPageView: View {
         .task(id: pageIndex) {
             image = nil; boxes = []; rects = []; crops = []
             if let r = PDFLetterExtractor.page(doc, index: pageIndex) {
-                let rk = PanelGeometry.resolvedRects(boxes: r.boxes, image: r.image)
+                let rk = PanelGeometry.panelRects(boxes: r.boxes, image: r.image)
                 image = r.image; boxes = r.boxes; rects = rk
                 crops = PanelGeometry.crops(image: r.image, boxes: r.boxes, rects: rk)
             }

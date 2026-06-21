@@ -22,7 +22,7 @@ struct SciFMApp: App {
                     .tag(1)
 
                 DiscoverView(selectedTab: $selectedTab)
-                    .tabItem { Label("Editorials", systemImage: "newspaper") }
+                    .tabItem { Label("Commentaries", systemImage: "newspaper") }
                     .tag(2)
 
                 PrimaryView(selectedTab: $selectedTab)
