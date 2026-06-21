@@ -33,6 +33,11 @@ struct DiscoverView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { viewModel.showDebug = true } label: {
+                        Image(systemName: "ladybug")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if isLoading {
                         ProgressView().scaleEffect(0.8)

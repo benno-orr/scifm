@@ -95,7 +95,7 @@ struct PrimaryView: View {
                     onTap: { viewModel.load(url: article.url, kind: .primary); selectedTab = 0 },
                     onReadFull: { viewModel.load(url: article.url, kind: .primary); selectedTab = 0 },
                     abstractText: { await FeedManager.shared.readingText(for: article) },
-                    onSeminarize: { viewModel.debugFigureURL = article.url; selectedTab = 4 },
+                    onSeminarize: { viewModel.debugFigureURL = article.url; viewModel.showDebug = true },
                     stacked: true
                 )
                 .listRowBackground(Color.rowTranslucent)
@@ -132,7 +132,7 @@ struct PrimaryView: View {
                 SearchResultRow(
                     result: result,
                     onReadFull: { viewModel.load(url: result.articleURL, kind: .primary); selectedTab = 0 },
-                    onSeminarize: { viewModel.debugFigureURL = result.articleURL; selectedTab = 4 },
+                    onSeminarize: { viewModel.debugFigureURL = result.articleURL; viewModel.showDebug = true },
                     stacked: true
                 )
                 .listRowBackground(Color.rowTranslucent)

@@ -21,22 +21,27 @@ struct SciFMApp: App {
                     .tabItem { Label("Reviews", systemImage: "text.book.closed") }
                     .tag(1)
 
-                DiscoverView(selectedTab: $selectedTab)
-                    .tabItem { Label("Commentaries", systemImage: "newspaper") }
-                    .tag(2)
-
                 PrimaryView(selectedTab: $selectedTab)
                     .tabItem { Label("Papers", systemImage: "doc.text.magnifyingglass") }
                     .tag(3)
 
-                SeminarDebugView()
-                    .tabItem { Label("Debug", systemImage: "ladybug") }
-                    .tag(4)
+                DiscoverView(selectedTab: $selectedTab)
+                    .tabItem { Label("Comms", systemImage: "newspaper") }
+                    .tag(2)
+
+                PlaylistsView(selectedTab: $selectedTab)
+                    .tabItem { Label("Playlists", systemImage: "music.note.list") }
+                    .tag(5)
             }
             .environmentObject(playerViewModel)
             .preferredColorScheme(.dark)
             .fullScreenCover(isPresented: $playerViewModel.showSeminar) {
                 SeminarCover()
+                    .environmentObject(playerViewModel)
+                    .preferredColorScheme(.dark)
+            }
+            .fullScreenCover(isPresented: $playerViewModel.showDebug) {
+                SeminarDebugView()
                     .environmentObject(playerViewModel)
                     .preferredColorScheme(.dark)
             }

@@ -25,8 +25,10 @@ final class PlayerViewModel: ObservableObject {
     @Published var mode: AppMode = .narration
     /// Drives the full-screen seminar cover presented over the whole app.
     @Published var showSeminar = false
-    /// Set to route the Debug tab to a paper's figures (e.g. from Seminarize).
+    /// Set to route the Debug view to a paper's figures (e.g. from Seminarize).
     @Published var debugFigureURL: URL? = nil
+    /// Drives the full-screen Debug view (no longer a tab).
+    @Published var showDebug = false
     @Published var exportMarkdown: String = ""
     @Published var featuredImageURL: URL? = nil
     // Narration mode

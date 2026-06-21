@@ -22,6 +22,7 @@ private struct DebugFigure: Identifiable {
 
 struct SeminarDebugView: View {
     @EnvironmentObject var viewModel: PlayerViewModel
+    @Environment(\.dismiss) private var dismiss
     @State private var urlText = ""
     @State private var figures: [DebugFigure] = []
     @State private var index = 0
@@ -86,6 +87,9 @@ struct SeminarDebugView: View {
                     Button { showPronunciations = true } label: {
                         Image(systemName: "character.book.closed")
                     }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
                 }
             }
             .sheet(isPresented: $showPronunciations) { PronunciationManagerView() }
