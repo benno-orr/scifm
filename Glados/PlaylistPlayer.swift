@@ -21,6 +21,9 @@ final class PlaylistPlayer: ObservableObject {
     private let openAITTS   = OpenAITTS()
     private var loadTask: Task<Void, Never>? = nil
     private let delegate = PlaylistDelegate()
+    /// article.id → Library entry id, so a finished track can be marked read
+    /// and replays in one session don't duplicate the entry.
+    private var libraryIDs: [String: UUID] = [:]
 
     /// The article currently cued/playing, if any.
     var current: FeedArticle? { queue.indices.contains(index) ? queue[index] : nil }
@@ -28,7 +31,7 @@ final class PlaylistPlayer: ObservableObject {
 
     init() {
         delegate.onFinish = { [weak self] in
-            Task { @MainActor in self?.advance() }
+            Task { @MainActor in self?.handleTrackFinished() }
         }
     }
 
@@ -80,6 +83,14 @@ final class PlaylistPlayer: ObservableObject {
         state = .idle
     }
 
+    /// Natural end of a track: mark it read in the Library, then advance.
+    private func handleTrackFinished() {
+        if let article = current, let id = libraryIDs[article.id] {
+            Task { await LibraryManager.shared.setFinished(id, true) }
+        }
+        advance()
+    }
+
     /// Auto-advance at end of a track; stops at the end of the playlist.
     private func advance() {
         guard index + 1 < queue.count else { stop(); return }
@@ -104,11 +115,23 @@ final class PlaylistPlayer: ObservableObject {
                 player.play()
                 audioPlayer = player
                 state = .playing
+                await saveToLibrary(article, wav: wav, duration: player.duration)
             } catch {
                 guard !Task.isCancelled else { return }
                 advance()   // skip a track that fails to synthesize
             }
         }
+    }
+
+    /// Persists a now-playing track to the Library as a Playlist-tagged entry
+    /// (begun). Skips if already saved this session. Marked read on completion.
+    private func saveToLibrary(_ article: FeedArticle, wav: Data, duration: TimeInterval) async {
+        guard libraryIDs[article.id] == nil else { return }
+        let item = await LibraryManager.shared.save(
+            title: article.title, sourceURL: article.url.absoluteString,
+            wavData: wav, sentences: [], duration: duration,
+            kind: .editorial, fromPlaylist: true, finished: false)
+        libraryIDs[article.id] = item.id
     }
 
     /// Streams the whole text to a single in-memory WAV (same path as AbstractPlayer).

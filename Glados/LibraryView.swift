@@ -116,7 +116,10 @@ struct LibraryListView: View {
 
     private func row(_ item: LibraryItem) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            kindBadge(item.contentKind)
+            HStack(spacing: 6) {
+                kindBadge(item.contentKind)
+                if item.fromPlaylist == true { playlistBadge }
+            }
 
             Text(item.title)
                 .font(.subheadline)
@@ -165,6 +168,15 @@ struct LibraryListView: View {
             .foregroundColor(.accentColor)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Color.accentColor.opacity(0.12), in: Capsule())
+    }
+
+    /// Marks an entry that was queued/played in Playlist mode.
+    private var playlistBadge: some View {
+        Label("PLAYLIST", systemImage: "music.note.list")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(.orange)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.orange.opacity(0.14), in: Capsule())
     }
 
     private func formatDuration(_ t: TimeInterval) -> String {

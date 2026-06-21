@@ -44,6 +44,8 @@ struct LibraryItem: Codable, Identifiable {
     var kind: ContentKind?
     /// Set for saved seminars; lets the figure player be rebuilt on replay.
     var panels: [StoredPanel]?
+    /// True if this entry was created by Playlist mode (auto-narrated queue).
+    var fromPlaylist: Bool?
 
     var contentKind: ContentKind { kind ?? .other }
 
@@ -133,7 +135,8 @@ actor LibraryManager {
 
     func save(title: String, sourceURL: String, wavData: Data,
               sentences: [StoredSentence], duration: TimeInterval,
-              kind: ContentKind = .other, panels: [StoredPanel]? = nil) -> LibraryItem {
+              kind: ContentKind = .other, panels: [StoredPanel]? = nil,
+              fromPlaylist: Bool = false, finished: Bool = false) -> LibraryItem {
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         let id = UUID()
         let fileName = "\(id.uuidString).wav"
@@ -142,8 +145,9 @@ actor LibraryManager {
         let item = LibraryItem(id: id, title: title, sourceURL: sourceURL,
                                dateAdded: Date(), duration: duration,
                                audioFileName: fileName, sentences: sentences,
-                               lastPlayedTime: 0, kind: kind, panels: panels,
-                               markedFinished: false, lastTouched: Date())
+                               lastPlayedTime: finished ? duration : 0,
+                               kind: kind, panels: panels, fromPlaylist: fromPlaylist,
+                               markedFinished: finished, lastTouched: Date())
         items.insert(item, at: 0)
         persist()
         return item
@@ -157,6 +161,7 @@ actor LibraryManager {
                                dateAdded: Date(), duration: 0,
                                audioFileName: "\(id.uuidString).wav", sentences: [],
                                lastPlayedTime: 0, kind: kind, panels: nil,
+                               fromPlaylist: false,
                                markedFinished: false, lastTouched: Date())
         items.insert(item, at: 0)
         persist()

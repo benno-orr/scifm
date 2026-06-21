@@ -13,15 +13,19 @@ struct PlaylistsView: View {
     @State private var articles: [FeedArticle] = []
     @State private var isLoading = false
     @State private var loadError = false
+    /// Scraped artwork for the track currently playing.
+    @State private var artworkURL: URL? = nil
 
-    private let playlistName = "All Commentaries"
+    /// Default playlist: the recent editorials/commentaries scraped from the web
+    /// (the same feed as the Comms tab).
+    private let playlistName = "Recent"
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 Group {
                     if isLoading && articles.isEmpty {
-                        ProgressView("Loading commentaries…")
+                        ProgressView("Loading editorials…")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if loadError && articles.isEmpty {
                         emptyError
@@ -69,7 +73,7 @@ struct PlaylistsView: View {
                         }
                 }
             } header: {
-                Text("All · \(articles.count) commentaries")
+                Text("Recent · \(articles.count) editorials")
                     .foregroundColor(.secondary)
             }
         }
@@ -87,7 +91,7 @@ struct PlaylistsView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(playlistName).font(.title3).fontWeight(.bold)
-                Text("\(articles.count) commentaries · auto-narrated")
+                Text("\(articles.count) recent editorials · auto-narrated")
                     .font(.caption).foregroundColor(.secondary)
 
                 Button {
@@ -149,36 +153,68 @@ struct PlaylistsView: View {
     // MARK: Now-playing bar
 
     private var nowPlayingBar: some View {
-        HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(spacing: 12) {
+            artwork
+            VStack(spacing: 3) {
                 Text(player.current?.title ?? "—")
-                    .font(.footnote).fontWeight(.semibold).lineLimit(1)
+                    .font(.subheadline).fontWeight(.semibold).lineLimit(2)
+                    .multilineTextAlignment(.center)
                 Text(player.state == .loading ? "Loading…" : (player.current?.source ?? player.playlistName))
                     .font(.caption2).foregroundColor(.secondary).lineLimit(1)
             }
-            Spacer(minLength: 0)
-            Button { player.previous() } label: { Image(systemName: "backward.fill") }
-            Button { player.togglePlayPause() } label: {
-                if player.state == .loading {
-                    ProgressView().scaleEffect(0.8).frame(width: 28, height: 28)
-                } else {
-                    Image(systemName: player.state == .playing ? "pause.fill" : "play.fill")
-                        .font(.title3).frame(width: 28, height: 28)
+            HStack(spacing: 36) {
+                Button { player.previous() } label: { Image(systemName: "backward.fill").font(.title3) }
+                Button { player.togglePlayPause() } label: {
+                    if player.state == .loading {
+                        ProgressView().scaleEffect(0.9).frame(width: 40, height: 40)
+                    } else {
+                        Image(systemName: player.state == .playing ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 40))
+                    }
                 }
+                Button { player.next() } label: { Image(systemName: "forward.fill").font(.title3) }
             }
-            Button { player.next() } label: { Image(systemName: "forward.fill") }
-            Button { player.stop() } label: { Image(systemName: "xmark") }
-                .foregroundColor(.secondary)
+            .overlay(alignment: .trailing) {
+                Button { player.stop() } label: { Image(systemName: "xmark") }
+                    .foregroundColor(.secondary).padding(.trailing, 4)
+            }
         }
         .foregroundColor(.primary)
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 10)
         .background(.ultraThinMaterial)
+        .task(id: player.current?.id) { await loadArtwork() }
+    }
+
+    /// Scraped artwork for the now-playing track (falls back to a glyph).
+    private var artwork: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground))
+            if let artworkURL {
+                AsyncImage(url: artworkURL) { phase in
+                    if case .success(let img) = phase {
+                        img.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Image(systemName: "newspaper").font(.largeTitle).foregroundColor(.secondary)
+                    }
+                }
+            } else {
+                Image(systemName: "newspaper").font(.largeTitle).foregroundColor(.secondary)
+            }
+        }
+        .frame(height: 160)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func loadArtwork() async {
+        guard let article = player.current else { artworkURL = nil; return }
+        artworkURL = await FeedManager.shared.fetchThumbnail(for: article)
     }
 
     private var emptyError: some View {
         VStack(spacing: 16) {
             Image(systemName: "wifi.slash").font(.system(size: 48)).foregroundColor(.secondary)
-            Text("Could not load commentaries").font(.headline)
+            Text("Could not load editorials").font(.headline)
             Text("Check your connection and pull to refresh.")
                 .font(.subheadline).foregroundColor(.secondary)
                 .multilineTextAlignment(.center).padding(.horizontal, 40)
