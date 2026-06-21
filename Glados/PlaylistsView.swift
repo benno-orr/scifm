@@ -162,41 +162,53 @@ struct PlaylistsView: View {
                 Text(player.state == .loading ? "Loading…" : (player.current?.source ?? player.playlistName))
                     .font(.caption2).foregroundColor(.secondary).lineLimit(1)
             }
-            HStack(spacing: 36) {
-                Button { player.previous() } label: { Image(systemName: "backward.fill").font(.title3) }
+            HStack(spacing: 44) {
+                Button { player.previous() } label: {
+                    Image(systemName: "backward.fill").font(.title2).frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
                 Button { player.togglePlayPause() } label: {
                     if player.state == .loading {
-                        ProgressView().scaleEffect(0.9).frame(width: 40, height: 40)
+                        ProgressView().scaleEffect(0.9).frame(width: 48, height: 48)
                     } else {
                         Image(systemName: player.state == .playing ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 40))
+                            .font(.system(size: 46)).frame(width: 48, height: 48)
                     }
                 }
-                Button { player.next() } label: { Image(systemName: "forward.fill").font(.title3) }
-            }
-            .overlay(alignment: .trailing) {
-                Button { player.stop() } label: { Image(systemName: "xmark") }
-                    .foregroundColor(.secondary).padding(.trailing, 4)
+                .buttonStyle(.plain)
+                Button { player.next() } label: {
+                    Image(systemName: "forward.fill").font(.title2).frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
             }
         }
         .foregroundColor(.primary)
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 10)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+            Button { player.stop() } label: {
+                Image(systemName: "xmark.circle.fill").font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .padding(10)
+        }
         .task(id: player.current?.id) { await loadArtwork() }
     }
 
-    /// Scraped artwork for the now-playing track (falls back to a glyph).
+    /// Scraped artwork for the now-playing track, shown whole (uncropped).
     private var artwork: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground))
             if let artworkURL {
                 AsyncImage(url: artworkURL) { phase in
                     if case .success(let img) = phase {
-                        img.resizable().aspectRatio(contentMode: .fill)
+                        img.resizable().scaledToFit()
                     } else {
                         Image(systemName: "newspaper").font(.largeTitle).foregroundColor(.secondary)
                     }
                 }
+                .padding(6)
             } else {
                 Image(systemName: "newspaper").font(.largeTitle).foregroundColor(.secondary)
             }

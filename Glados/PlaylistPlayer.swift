@@ -24,6 +24,13 @@ final class PlaylistPlayer: ObservableObject {
     /// article.id → Library entry id, so a finished track can be marked read
     /// and replays in one session don't duplicate the entry.
     private var libraryIDs: [String: UUID] = [:]
+    /// article.id → pre-synthesized WAV, prepared while the prior track plays.
+    private var prefetched: [String: Data] = [:]
+    private var prefetchTask: Task<Void, Never>? = nil
+    /// Polls playback position to trigger prefetch near the end of a track.
+    private var progressTimer: Timer?
+    /// Seconds before a track ends at which we begin prepping the next one.
+    private let prefetchLead: TimeInterval = 30
 
     /// The article currently cued/playing, if any.
     var current: FeedArticle? { queue.indices.contains(index) ? queue[index] : nil }
@@ -79,6 +86,9 @@ final class PlaylistPlayer: ObservableObject {
 
     func stop() {
         loadTask?.cancel(); loadTask = nil
+        prefetchTask?.cancel(); prefetchTask = nil
+        prefetched.removeAll()
+        progressTimer?.invalidate(); progressTimer = nil
         audioPlayer?.stop(); audioPlayer = nil
         state = .idle
     }
@@ -101,25 +111,66 @@ final class PlaylistPlayer: ObservableObject {
     private func loadAndPlayCurrent() {
         guard let article = current else { stop(); return }
         loadTask?.cancel()
+        progressTimer?.invalidate()
         audioPlayer?.stop(); audioPlayer = nil
         state = .loading
         loadTask = Task {
-            let text = await FeedManager.shared.readingText(for: article)
+            // Use the prefetched audio if it's ready; otherwise synthesize now.
+            let wav: Data?
+            if let cached = prefetched[article.id] {
+                wav = cached
+            } else {
+                wav = await synthesizeWav(for: article)
+            }
+            prefetched[article.id] = nil
             guard !Task.isCancelled else { return }
-            guard !text.isEmpty else { advance(); return }
+            guard let wav else { advance(); return }   // skip a track that fails
             do {
-                let wav = try await synthesize(text)
-                guard !Task.isCancelled else { return }
                 let player = try AVAudioPlayer(data: wav)
                 player.delegate = delegate
                 player.play()
                 audioPlayer = player
                 state = .playing
+                startProgressMonitor()
                 await saveToLibrary(article, wav: wav, duration: player.duration)
             } catch {
                 guard !Task.isCancelled else { return }
-                advance()   // skip a track that fails to synthesize
+                advance()
             }
+        }
+    }
+
+    /// Fetches reading text and synthesizes it to a WAV, or nil if empty/failed.
+    private func synthesizeWav(for article: FeedArticle) async -> Data? {
+        let text = await FeedManager.shared.readingText(for: article)
+        guard !text.isEmpty else { return nil }
+        return try? await synthesize(text)
+    }
+
+    /// Polls the current track's position; once within `prefetchLead` of the end,
+    /// begins synthesizing the next track so playback is gapless.
+    private func startProgressMonitor() {
+        progressTimer?.invalidate()
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+
+    private func tick() {
+        guard let p = audioPlayer, state == .playing else { return }
+        if p.duration - p.currentTime <= prefetchLead { prefetchNext() }
+    }
+
+    /// Synthesizes the next track in the background (once), caching its WAV.
+    private func prefetchNext() {
+        let n = index + 1
+        guard queue.indices.contains(n), prefetchTask == nil else { return }
+        let next = queue[n]
+        guard prefetched[next.id] == nil else { return }
+        prefetchTask = Task {
+            let wav = await synthesizeWav(for: next)
+            if let wav { prefetched[next.id] = wav }
+            prefetchTask = nil
         }
     }
 
