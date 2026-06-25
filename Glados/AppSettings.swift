@@ -70,6 +70,15 @@ enum AppSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "ttsProvider") }
     }
 
+    /// Playback speed multiplier for narration (1.0 = normal). Clamped 0.5–2.0.
+    static var playbackRate: Float {
+        get {
+            let r = UserDefaults.standard.float(forKey: "playbackRate")
+            return r == 0 ? 1.0 : min(2.0, max(0.5, r))
+        }
+        set { UserDefaults.standard.set(min(2.0, max(0.5, newValue)), forKey: "playbackRate") }
+    }
+
     static var llmProvider: LLMProviderType {
         get {
             let raw = UserDefaults.standard.string(forKey: "llmProvider") ?? ""

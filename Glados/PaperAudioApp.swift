@@ -26,11 +26,11 @@ struct SciFMApp: App {
                     .tag(3)
 
                 DiscoverView(selectedTab: $selectedTab)
-                    .tabItem { Label("Comms", systemImage: "newspaper") }
+                    .tabItem { Label("Articles", systemImage: "newspaper") }
                     .tag(2)
 
                 PlaylistsView(selectedTab: $selectedTab)
-                    .tabItem { Label("Playlists", systemImage: "music.note.list") }
+                    .tabItem { Label("Playlists", systemImage: "shuffle") }
                     .tag(5)
             }
             .environmentObject(playerViewModel)

@@ -34,9 +34,14 @@ struct WebReaderView: UIViewControllerRepresentable {
     let url: URL
     let onRead: (String, String) -> Void
     let onExportDoc: (String, String) -> Void
+    /// When true, the page is scraped automatically on load and `onScraped` is
+    /// fired (manual buttons appear only if auto-scraping fails).
+    var autoScrape: Bool = false
+    var onScraped: ((String, String) -> Void)? = nil
 
     func makeUIViewController(context: Context) -> _WebReaderVC {
-        _WebReaderVC(url: url, onRead: onRead, onExportDoc: onExportDoc)
+        _WebReaderVC(url: url, onRead: onRead, onExportDoc: onExportDoc,
+                     autoScrape: autoScrape, onScraped: onScraped)
     }
     func updateUIViewController(_ vc: _WebReaderVC, context: Context) {}
 }
@@ -47,21 +52,30 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
     private let url: URL
     private let onRead: (String, String) -> Void
     private let onExportDoc: (String, String) -> Void
+    private let autoScrape: Bool
+    private let onScraped: ((String, String) -> Void)?
 
     private var webView: WKWebView!
     private var readButton: UIButton!
     private var exportButton: UIButton!
     private var buttonStack: UIStackView!
     private var spinner: UIActivityIndicatorView!
+    private var statusLabel: UILabel!
     /// Which action the in-flight extraction should fire on completion.
     private var pendingForDoc = false
+    /// Guards against re-firing auto-scrape on later (sub-resource) navigations.
+    private var autoScrapeDone = false
 
     init(url: URL,
          onRead: @escaping (String, String) -> Void,
-         onExportDoc: @escaping (String, String) -> Void) {
+         onExportDoc: @escaping (String, String) -> Void,
+         autoScrape: Bool = false,
+         onScraped: ((String, String) -> Void)? = nil) {
         self.url = url
         self.onRead = onRead
         self.onExportDoc = onExportDoc
+        self.autoScrape = autoScrape
+        self.onScraped = onScraped
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -109,6 +123,15 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
         spinner.hidesWhenStopped = true
         view.addSubview(spinner)
 
+        // Status pill shown during auto-scrape (e.g. "Scraping article…").
+        statusLabel = UILabel()
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = .preferredFont(forTextStyle: .footnote)
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.textAlignment = .center
+        statusLabel.isHidden = true
+        view.addSubview(statusLabel)
+
         NSLayoutConstraint.activate([
             webView.topAnchor.constraint(equalTo: view.topAnchor),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -123,7 +146,17 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
 
             spinner.centerXAnchor.constraint(equalTo: buttonStack.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: buttonStack.centerYAnchor),
+
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
         ])
+
+        // In auto-scrape mode the manual buttons stay hidden unless scraping fails.
+        if autoScrape {
+            buttonStack.isHidden = true
+            statusLabel.isHidden = false
+            statusLabel.text = "Loading article…"
+        }
 
         webView.load(URLRequest(url: url))
     }
@@ -136,11 +169,44 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         setButtonsEnabled(true)
+        if autoScrape && !autoScrapeDone {
+            statusLabel.text = "Scraping article…"
+            spinner.startAnimating()
+            // Give late-rendering content a moment, then try (with a few retries).
+            attemptAutoScrape(retriesLeft: 3)
+        }
     }
 
     private func setButtonsEnabled(_ on: Bool) {
         readButton.isEnabled = on
         exportButton.isEnabled = on
+    }
+
+    // MARK: - Auto-scrape
+
+    /// Tries to extract the article automatically; retries a few times for pages
+    /// that finish loading before their body renders, then falls back to the
+    /// manual buttons so the user can scroll and tap.
+    private func attemptAutoScrape(retriesLeft: Int) {
+        guard !autoScrapeDone else { return }
+        runExtraction { [weak self] result in
+            guard let self else { return }
+            if let result {
+                self.autoScrapeDone = true
+                self.spinner.stopAnimating()
+                self.statusLabel.isHidden = true
+                self.onScraped?(result.title, result.body)
+            } else if retriesLeft > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    self.attemptAutoScrape(retriesLeft: retriesLeft - 1)
+                }
+            } else {
+                // Give up auto mode: reveal manual controls.
+                self.spinner.stopAnimating()
+                self.statusLabel.text = "Couldn't auto-scrape — scroll to the article, then choose:"
+                self.buttonStack.isHidden = false
+            }
+        }
     }
 
     // MARK: - Extraction
@@ -152,7 +218,24 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
         pendingForDoc = forDoc
         buttonStack.isHidden = true
         spinner.startAnimating()
+        runExtraction { [weak self] result in
+            guard let self else { return }
+            self.spinner.stopAnimating()
+            self.buttonStack.isHidden = false
+            guard let result else {
+                let btn = self.pendingForDoc ? self.exportButton : self.readButton
+                var cfg = btn?.configuration ?? .filled()
+                cfg.title = "Couldn't extract — scroll to the article first"
+                btn?.configuration = cfg
+                return
+            }
+            if forDoc { self.onExportDoc(result.title, result.body) }
+            else      { self.onRead(result.title, result.body) }
+        }
+    }
 
+    /// Runs the extraction JS and returns (title, body) on success, or nil.
+    private func runExtraction(completion: @escaping ((title: String, body: String)?) -> Void) {
         let js = """
         (function() {
             var title = (
@@ -232,29 +315,14 @@ final class _WebReaderVC: UIViewController, WKNavigationDelegate {
         })();
         """
 
-        webView.evaluateJavaScript(js) { [weak self] result, _ in
-            guard let self else { return }
-            self.spinner.stopAnimating()
-            self.buttonStack.isHidden = false
-
+        webView.evaluateJavaScript(js) { result, _ in
             guard let jsonStr = result as? String,
                   let data = jsonStr.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                   let title = json["title"],
                   let body = json["body"], body.count > 200
-            else {
-                // Show brief error feedback on the button that was tapped
-                let btn = self.pendingForDoc ? self.exportButton : self.readButton
-                var cfg = btn?.configuration ?? .filled()
-                cfg.title = "Couldn't extract — scroll to the article first"
-                btn?.configuration = cfg
-                return
-            }
-
-            let forDoc = self.pendingForDoc
-            DispatchQueue.main.async {
-                if forDoc { self.onExportDoc(title, body) } else { self.onRead(title, body) }
-            }
+            else { completion(nil); return }
+            DispatchQueue.main.async { completion((title: title, body: body)) }
         }
     }
 }

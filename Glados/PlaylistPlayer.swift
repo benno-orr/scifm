@@ -1,5 +1,7 @@
 import Foundation
 import AVFoundation
+import MediaPlayer
+import UIKit
 
 /// Spotify-style sequential TTS player for a list of feed articles. Synthesizes
 /// each article's reading text (abstract / lede) to speech and plays them back
@@ -24,6 +26,9 @@ final class PlaylistPlayer: ObservableObject {
     /// article.id → Library entry id, so a finished track can be marked read
     /// and replays in one session don't duplicate the entry.
     private var libraryIDs: [String: UUID] = [:]
+    /// article.ids the user bookmarked for "Read Later" this session (drives the
+    /// now-playing bookmark button; the Library flag is the source of truth).
+    @Published private(set) var readLaterIDs: Set<String> = []
     /// article.id → pre-synthesized WAV, prepared while the prior track plays.
     private var prefetched: [String: Data] = [:]
     private var prefetchTask: Task<Void, Never>? = nil
@@ -40,12 +45,82 @@ final class PlaylistPlayer: ObservableObject {
         delegate.onFinish = { [weak self] in
             Task { @MainActor in self?.handleTrackFinished() }
         }
+        setupRemoteCommands()
+    }
+
+    // MARK: - Remote control (AirPods / lock screen / Control Center)
+
+    private func configureSession() {
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowBluetoothA2DP])
+        try? s.setActive(true)
+    }
+
+    /// Wires hardware/remote transport (AirPods press, lock screen, car) to the
+    /// playlist. Handlers only act while a playlist is active, so they don't
+    /// fight the full-article player.
+    private func setupRemoteCommands() {
+        let c = MPRemoteCommandCenter.shared()
+        c.togglePlayPauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in guard let s = self, s.isActive else { return }; s.togglePlayPause() }
+            return .success
+        }
+        c.playCommand.addTarget { [weak self] _ in
+            Task { @MainActor in guard let s = self, s.state == .paused else { return }; s.togglePlayPause() }
+            return .success
+        }
+        c.pauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in guard let s = self, s.state == .playing else { return }; s.togglePlayPause() }
+            return .success
+        }
+        c.nextTrackCommand.addTarget { [weak self] _ in
+            Task { @MainActor in guard let s = self, s.isActive else { return }; s.next() }
+            return .success
+        }
+        c.previousTrackCommand.addTarget { [weak self] _ in
+            Task { @MainActor in guard let s = self, s.isActive else { return }; s.previous() }
+            return .success
+        }
+    }
+
+    /// Publishes the current track to the lock screen / AirPods display.
+    private func updateNowPlaying() {
+        guard let article = current else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        }
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: article.title,
+            MPMediaItemPropertyArtist: "\(article.source) · \(playlistName)",
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+            MPNowPlayingInfoPropertyPlaybackRate: state == .playing ? Double(AppSettings.playbackRate) : 0.0,
+        ]
+        if let p = audioPlayer {
+            info[MPMediaItemPropertyPlaybackDuration] = p.duration
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = p.currentTime
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        loadNowPlayingArtwork(for: article)
+    }
+
+    private func loadNowPlayingArtwork(for article: FeedArticle) {
+        let targetID = article.id
+        Task {
+            guard let url = await FeedManager.shared.fetchThumbnail(for: article),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data),
+                  current?.id == targetID,
+                  var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        }
     }
 
     /// Starts a playlist from the given index.
     func play(playlist name: String, articles: [FeedArticle], startAt: Int = 0) {
         guard !articles.isEmpty else { return }
         stop()
+        configureSession()
         playlistName = name
         queue = articles
         index = max(0, min(startAt, articles.count - 1))
@@ -55,6 +130,32 @@ final class PlaylistPlayer: ObservableObject {
     /// True if `id` is the track currently cued/playing in this playlist.
     func isCurrent(_ id: String) -> Bool { current?.id == id }
 
+    /// Whether the currently-playing track is bookmarked for Read Later.
+    var isCurrentReadLater: Bool {
+        guard let id = current?.id else { return false }
+        return readLaterIDs.contains(id)
+    }
+
+    /// Bookmark / un-bookmark the current track for Read Later. The Library entry
+    /// is updated now if it exists, or flagged when it's saved (see saveToLibrary).
+    func toggleReadLaterForCurrent() {
+        guard let article = current else { return }
+        let on = !readLaterIDs.contains(article.id)
+        if on { readLaterIDs.insert(article.id) } else { readLaterIDs.remove(article.id) }
+        if let id = libraryIDs[article.id] {
+            Task { await LibraryManager.shared.setReadLater(id, on) }
+        }
+    }
+
+    /// Applies the current reading-speed setting to the live track (if any).
+    func applyPlaybackRate() {
+        guard let p = audioPlayer else { return }
+        p.enableRate = true
+        let wasPlaying = (state == .playing)
+        p.rate = AppSettings.playbackRate
+        if wasPlaying && !p.isPlaying { p.play() }
+    }
+
     func togglePlayPause() {
         switch state {
         case .playing: audioPlayer?.pause(); state = .paused
@@ -62,6 +163,7 @@ final class PlaylistPlayer: ObservableObject {
         case .idle:    if !queue.isEmpty { loadAndPlayCurrent() }
         case .loading: break
         }
+        updateNowPlaying()
     }
 
     func next() {
@@ -91,6 +193,7 @@ final class PlaylistPlayer: ObservableObject {
         progressTimer?.invalidate(); progressTimer = nil
         audioPlayer?.stop(); audioPlayer = nil
         state = .idle
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
     /// Natural end of a track: mark it read in the Library, then advance.
@@ -128,10 +231,13 @@ final class PlaylistPlayer: ObservableObject {
             do {
                 let player = try AVAudioPlayer(data: wav)
                 player.delegate = delegate
+                player.enableRate = true
+                player.rate = AppSettings.playbackRate
                 player.play()
                 audioPlayer = player
                 state = .playing
                 startProgressMonitor()
+                updateNowPlaying()
                 await saveToLibrary(article, wav: wav, duration: player.duration)
             } catch {
                 guard !Task.isCancelled else { return }
@@ -141,10 +247,36 @@ final class PlaylistPlayer: ObservableObject {
     }
 
     /// Fetches reading text and synthesizes it to a WAV, or nil if empty/failed.
+    /// Builds the track audio: an intro reading the journal, the article type,
+    /// and the title, then a short verbal pause, then the body. nil if the body
+    /// is empty or synthesis fails.
     private func synthesizeWav(for article: FeedArticle) async -> Data? {
-        let text = await FeedManager.shared.readingText(for: article)
-        guard !text.isEmpty else { return nil }
-        return try? await synthesize(text)
+        let body = await FeedManager.shared.readingText(for: article)
+        guard !body.isEmpty else { return nil }
+        let intro = Self.introLine(for: article)
+        do {
+            var pcm = Data()
+            if !intro.isEmpty {
+                pcm.append(try await synthesizePCM(intro))
+                pcm.append(Self.silencePCM(seconds: 0.8))   // the pause before the body
+            }
+            pcm.append(try await synthesizePCM(body))
+            return WAVBuilder.make(pcmData: pcm)
+        } catch {
+            return nil
+        }
+    }
+
+    /// "{journal} {type}. {title}." — e.g. "Nature, Research Highlight. <title>."
+    private static func introLine(for article: FeedArticle) -> String {
+        let source = article.source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label  = article.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title  = article.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lead = [source, label].filter { !$0.isEmpty }.joined(separator: ", ")
+        if !lead.isEmpty, !title.isEmpty { lead += ". " }
+        lead += title
+        guard !lead.isEmpty else { return "" }
+        return lead.hasSuffix(".") ? lead : lead + "."
     }
 
     /// Polls the current track's position; once within `prefetchLead` of the end,
@@ -183,10 +315,14 @@ final class PlaylistPlayer: ObservableObject {
             wavData: wav, sentences: [], duration: duration,
             kind: .editorial, fromPlaylist: true, finished: false)
         libraryIDs[article.id] = item.id
+        // Apply a Read Later bookmark made before the entry existed.
+        if readLaterIDs.contains(article.id) {
+            await LibraryManager.shared.setReadLater(item.id, true)
+        }
     }
 
-    /// Streams the whole text to a single in-memory WAV (same path as AbstractPlayer).
-    private func synthesize(_ text: String) async throws -> Data {
+    /// Streams text to raw linear16 24 kHz mono PCM (the TTS output format).
+    private func synthesizePCM(_ text: String) async throws -> Data {
         let chunks = TextChunker.chunk(ScientificPronunciation.rewrite(text))
         var pcm = Data()
         for chunk in chunks {
@@ -199,7 +335,12 @@ final class PlaylistPlayer: ObservableObject {
             for try await data in stream { pcm.append(data) }
             CostTracker.shared.record(Pricing.ttsCost(chars: chunk.count, provider: AppSettings.ttsProvider))
         }
-        return WAVBuilder.make(pcmData: pcm)
+        return pcm
+    }
+
+    /// `seconds` of silence as 24 kHz mono linear16 PCM (zeros).
+    private static func silencePCM(seconds: Double) -> Data {
+        Data(count: Int(24_000 * seconds) * 2)
     }
 }
 

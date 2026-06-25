@@ -13,6 +13,11 @@ enum ScientificPronunciation {
             )
         }
 
+        // Generic Greek letters → their spelled-out names (after the specific
+        // rules above, so β-catenin etc. keep their tuned pronunciations). A
+        // dash right after the letter becomes a space: "β-Arrestin" → "beta Arrestin".
+        result = rewriteGreekLetters(result)
+
         // Interleukin numbers: IL-6 → "interleukin 6", IL-10 → "interleukin 10"
         if let re = try? NSRegularExpression(pattern: "\\bIL-(\\d+)\\b") {
             let range = NSRange(result.startIndex..<result.endIndex, in: result)
@@ -30,6 +35,37 @@ enum ScientificPronunciation {
             result = re.stringByReplacingMatches(in: result, range: range, withTemplate: template)
         }
 
+        return result
+    }
+
+    /// Greek letter → spoken word. Upper- and lower-case map to the same word
+    /// (TTS doesn't care about case).
+    private static let greekWords: [Character: String] = [
+        "α": "alpha", "β": "beta", "γ": "gamma", "δ": "delta", "ε": "epsilon",
+        "ζ": "zeta", "η": "eta", "θ": "theta", "ι": "iota", "κ": "kappa",
+        "λ": "lambda", "μ": "mu", "ν": "nu", "ξ": "xi", "ο": "omicron",
+        "π": "pi", "ρ": "rho", "σ": "sigma", "ς": "sigma", "τ": "tau",
+        "υ": "upsilon", "φ": "phi", "χ": "chi", "ψ": "psi", "ω": "omega",
+        "Α": "alpha", "Β": "beta", "Γ": "gamma", "Δ": "delta", "Ε": "epsilon",
+        "Ζ": "zeta", "Η": "eta", "Θ": "theta", "Ι": "iota", "Κ": "kappa",
+        "Λ": "lambda", "Μ": "mu", "Ν": "nu", "Ξ": "xi", "Ο": "omicron",
+        "Π": "pi", "Ρ": "rho", "Σ": "sigma", "Τ": "tau", "Υ": "upsilon",
+        "Φ": "phi", "Χ": "chi", "Ψ": "psi", "Ω": "omega",
+    ]
+
+    /// Replaces Greek letters with their names; a dash immediately following the
+    /// letter is turned into a space (e.g. "β-Arrestin" → "beta Arrestin").
+    private static func rewriteGreekLetters(_ text: String) -> String {
+        var result = text
+        let dashes = ["-", "\u{2010}", "\u{2011}", "\u{2012}", "\u{2013}", "\u{2014}"]
+        for (letter, word) in greekWords {
+            let g = String(letter)
+            guard result.contains(g) else { continue }
+            for dash in dashes {
+                result = result.replacingOccurrences(of: g + dash, with: word + " ")
+            }
+            result = result.replacingOccurrences(of: g, with: word)
+        }
         return result
     }
 

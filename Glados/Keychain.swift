@@ -46,10 +46,22 @@ struct APIKeySetupView: View {
     @State private var deepgramKey:  String = Keychain.get("deepgramAPIKey")  ?? ""
     @State private var openaiKey:    String = Keychain.get("openaiAPIKey")    ?? ""
     @State private var anthropicKey: String = Keychain.get("anthropicAPIKey") ?? ""
+    @State private var playbackRate: Double = Double(AppSettings.playbackRate)
 
     var body: some View {
         NavigationView {
             Form {
+                // MARK: Reading speed
+                Section(header: Text("Reading Speed")) {
+                    HStack {
+                        Slider(value: $playbackRate, in: 0.5...2.0, step: 0.05)
+                        Text(String(format: "%.2f×", playbackRate))
+                            .font(.callout.monospacedDigit()).frame(width: 56, alignment: .trailing)
+                    }
+                    Text("Applies to narration and playlist playback.")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+
                 // MARK: TTS
                 Section(header: Text("TTS Provider")) {
                     Picker("Provider", selection: $ttsProvider) {
@@ -123,6 +135,8 @@ struct APIKeySetupView: View {
         if !anthropicKey.isEmpty { Keychain.set(anthropicKey, forKey: "anthropicAPIKey") }
         AppSettings.ttsProvider = ttsProvider
         AppSettings.llmProvider = llmProvider
+        AppSettings.playbackRate = Float(playbackRate)
+        PlaylistPlayer.shared.applyPlaybackRate()
         isPresented = false
     }
 }

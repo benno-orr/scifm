@@ -7,6 +7,12 @@ enum TextChunker {
     static let maxChunkLength = 500
 
     static func chunk(_ text: String) -> [String] {
+        // Treat every hard line break (paragraph, heading, list item) as a
+        // sentence boundary: lines that don't already end in terminal punctuation
+        // get a period, so TTS pauses instead of blurring the last word of one
+        // line into the first of the next.
+        let text = normalizeLineBreaks(text)
+
         let tokenizer = NLTokenizer(unit: .sentence)
         tokenizer.string = text
         var sentences: [String] = []
@@ -34,6 +40,27 @@ enum TextChunker {
         }
         if !current.isEmpty { chunks.append(current.trimmingCharacters(in: .whitespaces)) }
         return chunks.filter { !$0.isEmpty }
+    }
+
+    /// Ensures each non-empty line ends in sentence-terminal punctuation, so the
+    /// sentence tokenizer breaks there and TTS inserts a natural pause. Trailing
+    /// quotes/brackets are looked past when deciding if a line is already ended.
+    private static func normalizeLineBreaks(_ text: String) -> String {
+        let terminal: Set<Character> = [".", "!", "?", ":", ";", "…"]
+        let skip: Set<Character> = [")", "]", "}", "\"", "”", "’", "'", "»"]
+        var out: [String] = []
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            // Last meaningful character, ignoring trailing quotes/brackets.
+            var last: Character = " "
+            for ch in line.reversed() {
+                if skip.contains(ch) { continue }
+                last = ch; break
+            }
+            out.append(terminal.contains(last) ? line : line + ".")
+        }
+        return out.joined(separator: " ")
     }
 
     private static func splitLong(_ text: String) -> [String] {

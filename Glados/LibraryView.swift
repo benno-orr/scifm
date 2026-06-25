@@ -7,14 +7,17 @@ struct LibraryListView: View {
     @State private var items: [LibraryItem] = []
     @State private var filter: Filter = .reading
 
-    enum Filter: String, CaseIterable { case reading = "Reading", read = "Read", saved = "Seminars" }
+    enum Filter: String, CaseIterable {
+        case reading = "Reading", read = "Read", readLater = "Read Later", saved = "Seminars"
+    }
 
     // Seminars live in their own Saved section; Reading/Read are the narration docs.
     private var shown: [LibraryItem] {
         switch filter {
-        case .reading: return items.filter { $0.contentKind != .seminar && !$0.isFinished }
-        case .read:    return items.filter { $0.contentKind != .seminar && $0.isFinished }
-        case .saved:   return items.filter { $0.contentKind == .seminar }
+        case .reading:   return items.filter { $0.contentKind != .seminar && !$0.isFinished }
+        case .read:      return items.filter { $0.contentKind != .seminar && $0.isFinished }
+        case .readLater: return items.filter { $0.readLater == true }
+        case .saved:     return items.filter { $0.contentKind == .seminar }
         }
     }
 
@@ -57,15 +60,26 @@ struct LibraryListView: View {
     }
 
     private var emptyIcon: String {
-        switch filter { case .reading: return "headphones"; case .read: return "checkmark.circle"; case .saved: return "rectangle.3.group" }
+        switch filter {
+        case .reading: return "headphones"
+        case .read: return "checkmark.circle"
+        case .readLater: return "bookmark"
+        case .saved: return "rectangle.3.group"
+        }
     }
     private var emptyTitle: String {
-        switch filter { case .reading: return "Nothing in progress"; case .read: return "Nothing finished yet"; case .saved: return "No seminars yet" }
+        switch filter {
+        case .reading: return "Nothing in progress"
+        case .read: return "Nothing finished yet"
+        case .readLater: return "Nothing saved yet"
+        case .saved: return "No seminars yet"
+        }
     }
     private var emptyDetail: String {
         switch filter {
         case .reading: return "Articles you start appear here until you finish them."
         case .read:    return "Articles you listen to the end move here."
+        case .readLater: return "Tap the bookmark while a playlist track plays to save it here."
         case .saved:   return "Seminars you generate from the Papers tab are saved here."
         }
     }
@@ -172,7 +186,7 @@ struct LibraryListView: View {
 
     /// Marks an entry that was queued/played in Playlist mode.
     private var playlistBadge: some View {
-        Label("PLAYLIST", systemImage: "music.note.list")
+        Label("PLAYLIST", systemImage: "shuffle")
             .font(.system(size: 9, weight: .semibold))
             .foregroundColor(.orange)
             .padding(.horizontal, 6).padding(.vertical, 2)

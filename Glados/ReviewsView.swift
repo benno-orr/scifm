@@ -7,7 +7,7 @@ struct ReviewsView: View {
     @State private var articles: [FeedArticle] = []
     @State private var isLoading = false
     @State private var loadError = false
-    @State private var selectedArticle: FeedArticle? = nil
+    @State private var flowTarget: ArticleFlowTarget? = nil
 
     var body: some View {
         NavigationView {
@@ -20,7 +20,7 @@ struct ReviewsView: View {
                     List(articles) { article in
                         ArticleRow(
                             article: article,
-                            onTap: { selectedArticle = article },
+                            onTap: { flowTarget = ArticleFlowTarget(url: article.url, title: article.title) },
                             onReadFull: { viewModel.load(url: article.url, kind: .review); selectedTab = 0 },
                             abstractText: { await resolveAbstract(article) }
                         )
@@ -52,23 +52,16 @@ struct ReviewsView: View {
             }
             .onAppear { if articles.isEmpty { Task { await loadFeed() } } }
             .refreshable { await loadFeed() }
-            .sheet(item: $selectedArticle) { article in
-                ArticleDetailSheet(
-                    article: article,
-                    onReadAbstract: { abstract in
-                        selectedArticle = nil
-                        viewModel.readText(abstract, title: article.title)
+            .fullScreenCover(item: $flowTarget) { target in
+                ArticleFlowView(
+                    target: target,
+                    onRead: { title, body in
+                        viewModel.processWebContent(title: title, bodyText: body)
                         selectedTab = 0
                     },
-                    onReadFull: {
-                        selectedArticle = nil
-                        viewModel.load(url: article.url, kind: .review)
+                    onExport: { title, body in
+                        viewModel.generateDocumentFromText(title: title, bodyText: body, sourceURL: target.url)
                         selectedTab = 0
-                    },
-                    onExportDoc: {
-                        selectedArticle = nil
-                        selectedTab = 0
-                        viewModel.generateDocument(url: article.url)
                     }
                 )
             }

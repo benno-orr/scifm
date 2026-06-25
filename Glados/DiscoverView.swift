@@ -7,7 +7,7 @@ struct DiscoverView: View {
     @State private var articles: [FeedArticle] = []
     @State private var isLoading = false
     @State private var loadError = false
-    @State private var selectedArticle: FeedArticle? = nil
+    @State private var flowTarget: ArticleFlowTarget? = nil
 
     var body: some View {
         NavigationView {
@@ -20,7 +20,7 @@ struct DiscoverView: View {
                     List(articles) { article in
                         ArticleRow(
                             article: article,
-                            onTap: { selectedArticle = article },
+                            onTap: { flowTarget = ArticleFlowTarget(url: article.url, title: article.title) },
                             onReadFull: { viewModel.load(url: article.url, kind: .editorial); selectedTab = 0 },
                             abstractText: { await resolveAbstract(article) }
                         )
@@ -50,21 +50,15 @@ struct DiscoverView: View {
             }
             .onAppear { if articles.isEmpty { Task { await loadFeed() } } }
             .refreshable { await loadFeed() }
-            .sheet(item: $selectedArticle) { article in
-                ArticleDetailSheet(
-                    article: article,
-                    onReadAbstract: { _ in
-                        selectedArticle = nil
+            .fullScreenCover(item: $flowTarget) { target in
+                ArticleFlowView(
+                    target: target,
+                    onRead: { title, body in
+                        viewModel.processWebContent(title: title, bodyText: body)
                         selectedTab = 0
-                        viewModel.status = .fetching
-                        Task {
-                            let text = await FeedManager.shared.readingText(for: article)
-                            viewModel.readText(text, title: article.title)
-                        }
                     },
-                    onReadFull: {
-                        selectedArticle = nil
-                        viewModel.load(url: article.url, kind: .editorial)
+                    onExport: { title, body in
+                        viewModel.generateDocumentFromText(title: title, bodyText: body, sourceURL: target.url)
                         selectedTab = 0
                     }
                 )

@@ -41,6 +41,7 @@ final class AudioPlayer: ObservableObject {
     // Streaming mode (AVAudioEngine)
     private var engine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
+    private var timePitch: AVAudioUnitTimePitch?   // reading-speed control (tempo, pitch-preserved)
     private var streamData = Data()           // accumulated int16 PCM, enables seeking
     private var streamBaseTime: TimeInterval = 0  // time offset of the current schedule origin
     private var scheduleEpoch = 0             // bumped on seek to ignore stale buffer callbacks
@@ -182,10 +183,19 @@ final class AudioPlayer: ObservableObject {
         pendingBuffers = 0; userPaused = seeded
         let e = AVAudioEngine()
         let pn = AVAudioPlayerNode()
+        let tp = AVAudioUnitTimePitch()
+        tp.rate = AppSettings.playbackRate          // reading speed (1.0 = normal)
         e.attach(pn)
-        e.connect(pn, to: e.mainMixerNode, format: AudioPlayer.streamFmt)
+        e.attach(tp)
+        e.connect(pn, to: tp, format: AudioPlayer.streamFmt)
+        e.connect(tp, to: e.mainMixerNode, format: AudioPlayer.streamFmt)
         try? e.start()
-        engine = e; playerNode = pn
+        engine = e; playerNode = pn; timePitch = tp
+    }
+
+    /// Updates reading speed on the live stream (1.0 = normal).
+    func setPlaybackRate(_ rate: Float) {
+        timePitch?.rate = min(2.0, max(0.5, rate))
     }
 
     /// Append a raw int16 24 kHz PCM chunk. Playback begins automatically once
@@ -329,10 +339,12 @@ final class AudioPlayer: ObservableObject {
 
     private func setupRemoteCommands() {
         let c = MPRemoteCommandCenter.shared()
-        c.playCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in self?.play() }; return .success }
-        c.pauseCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in self?.pause() }; return .success }
-        c.togglePlayPauseCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in self?.togglePlayPause() }; return .success }
-        c.stopCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in self?.stop() }; return .success }
+        // While a playlist is active it owns the transport controls, so the
+        // full-article player ignores remote commands to avoid double-handling.
+        c.playCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in guard !PlaylistPlayer.shared.isActive else { return }; self?.play() }; return .success }
+        c.pauseCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in guard !PlaylistPlayer.shared.isActive else { return }; self?.pause() }; return .success }
+        c.togglePlayPauseCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in guard !PlaylistPlayer.shared.isActive else { return }; self?.togglePlayPause() }; return .success }
+        c.stopCommand.addTarget { [weak self] _ in Task { @MainActor [weak self] in guard !PlaylistPlayer.shared.isActive else { return }; self?.stop() }; return .success }
         c.changePlaybackPositionCommand.isEnabled = true
         c.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }

@@ -14,7 +14,7 @@ struct PrimaryView: View {
     @State private var feed: [FeedArticle] = []
     @State private var isLoadingFeed = false
     @State private var feedError = false
-    @State private var selectedArticle: FeedArticle? = nil
+    @State private var flowTarget: ArticleFlowTarget? = nil
 
     @ObservedObject private var hidden = HiddenPapers.shared
     @AppStorage("showHiddenPapers") private var showHidden = false
@@ -50,21 +50,15 @@ struct PrimaryView: View {
             }
             .onAppear { if feed.isEmpty { Task { await loadFeed() } } }
             .refreshable { await loadFeed() }
-            .sheet(item: $selectedArticle) { article in
-                ArticleDetailSheet(
-                    article: article,
-                    onReadAbstract: { _ in
-                        selectedArticle = nil
+            .fullScreenCover(item: $flowTarget) { target in
+                ArticleFlowView(
+                    target: target,
+                    onRead: { title, body in
+                        viewModel.processWebContent(title: title, bodyText: body)
                         selectedTab = 0
-                        viewModel.status = .fetching
-                        Task {
-                            let text = await FeedManager.shared.readingText(for: article)
-                            viewModel.readText(text, title: article.title)
-                        }
                     },
-                    onReadFull: {
-                        selectedArticle = nil
-                        viewModel.load(url: article.url, kind: .primary)
+                    onExport: { title, body in
+                        viewModel.generateDocumentFromText(title: title, bodyText: body, sourceURL: target.url)
                         selectedTab = 0
                     }
                 )
@@ -92,8 +86,8 @@ struct PrimaryView: View {
                 let isHidden = hidden.isHidden(article.id)
                 ArticleRow(
                     article: article,
-                    onTap: { viewModel.load(url: article.url, kind: .primary); selectedTab = 0 },
-                    onReadFull: { viewModel.load(url: article.url, kind: .primary); selectedTab = 0 },
+                    onTap: { flowTarget = ArticleFlowTarget(url: article.url, title: article.title) },
+                    onReadFull: { flowTarget = ArticleFlowTarget(url: article.url, title: article.title) },
                     abstractText: { await FeedManager.shared.readingText(for: article) },
                     onSeminarize: { viewModel.debugFigureURL = article.url; viewModel.showDebug = true },
                     stacked: true
@@ -131,7 +125,7 @@ struct PrimaryView: View {
             List(results) { result in
                 SearchResultRow(
                     result: result,
-                    onReadFull: { viewModel.load(url: result.articleURL, kind: .primary); selectedTab = 0 },
+                    onReadFull: { flowTarget = ArticleFlowTarget(url: result.articleURL, title: result.title) },
                     onSeminarize: { viewModel.debugFigureURL = result.articleURL; viewModel.showDebug = true },
                     stacked: true
                 )

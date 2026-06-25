@@ -59,6 +59,8 @@ final class AbstractPlayer: ObservableObject {
                 let wav = WAVBuilder.make(pcmData: allPCM)
                 let player = try AVAudioPlayer(data: wav)
                 player.delegate = Coordinator.shared
+                player.enableRate = true
+                player.rate = AppSettings.playbackRate
                 player.play()
                 audioPlayer = player
                 state = .playing

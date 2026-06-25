@@ -46,6 +46,8 @@ struct LibraryItem: Codable, Identifiable {
     var panels: [StoredPanel]?
     /// True if this entry was created by Playlist mode (auto-narrated queue).
     var fromPlaylist: Bool?
+    /// User bookmarked this to come back to ("Read Later").
+    var readLater: Bool?
 
     var contentKind: ContentKind { kind ?? .other }
 
@@ -147,6 +149,7 @@ actor LibraryManager {
                                audioFileName: fileName, sentences: sentences,
                                lastPlayedTime: finished ? duration : 0,
                                kind: kind, panels: panels, fromPlaylist: fromPlaylist,
+                               readLater: false,
                                markedFinished: finished, lastTouched: Date())
         items.insert(item, at: 0)
         persist()
@@ -161,7 +164,7 @@ actor LibraryManager {
                                dateAdded: Date(), duration: 0,
                                audioFileName: "\(id.uuidString).wav", sentences: [],
                                lastPlayedTime: 0, kind: kind, panels: nil,
-                               fromPlaylist: false,
+                               fromPlaylist: false, readLater: false,
                                markedFinished: false, lastTouched: Date())
         items.insert(item, at: 0)
         persist()
@@ -178,6 +181,14 @@ actor LibraryManager {
         items[idx].duration = duration
         items[idx].lastTouched = Date()
         if let panels { items[idx].panels = panels }
+        persist()
+    }
+
+    /// Bookmark / un-bookmark an item for "Read Later".
+    func setReadLater(_ id: UUID, _ on: Bool) {
+        guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        items[idx].readLater = on
+        items[idx].lastTouched = Date()
         persist()
     }
 

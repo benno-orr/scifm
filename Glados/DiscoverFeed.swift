@@ -226,6 +226,7 @@ actor FeedManager {
     func fetchAll() async -> [FeedArticle] {
         await withTaskGroup(of: [FeedArticle].self) { group in
             group.addTask { await self.scrapeNatureBriefings() }
+            group.addTask { await self.scrapeNatureHighlights() }
             for source in sources {
                 group.addTask { await self.fetch(source: source) }
             }
@@ -242,6 +243,11 @@ actor FeedManager {
     /// as the summary (read directly, no DOI/abstract round-trip needed).
     func scrapeNatureBriefings() async -> [FeedArticle] {
         await scrapeNatureList(type: "research-briefing", linkContains: "/articles/d41586-", label: "Research Briefing")
+    }
+
+    /// Scrapes Nature's Research Highlights — brief write-ups of notable papers.
+    func scrapeNatureHighlights() async -> [FeedArticle] {
+        await scrapeNatureList(type: "research-highlight", linkContains: "/articles/d41586-", label: "Research Highlight")
     }
 
     /// Scrapes a Nature article listing (?type=…). `linkContains` filters to the

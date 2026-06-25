@@ -30,7 +30,7 @@ struct SeminarizeView: View {
                 }
                 .padding(.horizontal)
 
-                Text("Tip: tap the ⧉ icon on any paper in Commentaries, Reviews, or Primary to seminarize it.")
+                Text("Tip: tap the ⧉ icon on any paper in Articles, Reviews, or Papers to seminarize it.")
                     .font(.caption2).foregroundColor(.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
                 Spacer()

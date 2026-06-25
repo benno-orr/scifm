@@ -215,16 +215,16 @@ final class PlayerViewModel: ObservableObject {
 
     /// Builds a document from text already extracted in the in-app browser (the
     /// fallback when a direct fetch fails — common for Nature/Cell pages).
-    func generateDocumentFromText(title: String, bodyText: String) {
+    func generateDocumentFromText(title: String, bodyText: String, sourceURL: URL? = nil) {
         showWebReader = false
         documentExport = nil
         documentError = nil
         documentStatus = "Cleaning text…"
         showDocumentSheet = true
+        let source = (sourceURL ?? pendingURL)?.absoluteString ?? ""
         Task {
             let cleaned = await processor.cleanText(bodyText)
-            await buildDocument(title: title, rawBody: cleaned,
-                                sourceURL: pendingURL?.absoluteString ?? "", imageURL: nil)
+            await buildDocument(title: title, rawBody: cleaned, sourceURL: source, imageURL: nil)
         }
     }
 
