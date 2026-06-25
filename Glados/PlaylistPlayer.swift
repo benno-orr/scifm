@@ -267,7 +267,8 @@ final class PlaylistPlayer: ObservableObject {
         }
     }
 
-    /// "{journal} {type}. {title}." — e.g. "Nature, Research Highlight. <title>."
+    /// "{journal}, {type}. {title}. Published {date}." — e.g.
+    /// "Nature, Research Highlight. <title>. Published March 4, 2026."
     private static func introLine(for article: FeedArticle) -> String {
         let source = article.source.trimmingCharacters(in: .whitespacesAndNewlines)
         let label  = article.label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -275,9 +276,20 @@ final class PlaylistPlayer: ObservableObject {
         var lead = [source, label].filter { !$0.isEmpty }.joined(separator: ", ")
         if !lead.isEmpty, !title.isEmpty { lead += ". " }
         lead += title
+        if let date = article.publishedDate {
+            if !lead.isEmpty, !lead.hasSuffix(".") { lead += "." }
+            lead += " Published \(Self.introDateFormatter.string(from: date))"
+        }
         guard !lead.isEmpty else { return "" }
         return lead.hasSuffix(".") ? lead : lead + "."
     }
+
+    /// Spoken publication date, e.g. "March 4, 2026".
+    private static let introDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM d, yyyy"
+        return f
+    }()
 
     /// Polls the current track's position; once within `prefetchLead` of the end,
     /// begins synthesizing the next track so playback is gapless.

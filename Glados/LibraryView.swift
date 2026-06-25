@@ -79,7 +79,7 @@ struct LibraryListView: View {
         switch filter {
         case .reading: return "Articles you start appear here until you finish them."
         case .read:    return "Articles you listen to the end move here."
-        case .readLater: return "Tap the bookmark while a playlist track plays to save it here."
+        case .readLater: return "Tap the bookmark while a station track plays to save it here."
         case .saved:   return "Seminars you generate from the Papers tab are saved here."
         }
     }
@@ -184,9 +184,9 @@ struct LibraryListView: View {
             .background(Color.accentColor.opacity(0.12), in: Capsule())
     }
 
-    /// Marks an entry that was queued/played in Playlist mode.
+    /// Marks an entry that was queued/played in Radio mode.
     private var playlistBadge: some View {
-        Label("PLAYLIST", systemImage: "shuffle")
+        Label("RADIO", systemImage: "dot.radiowaves.left.and.right")
             .font(.system(size: 9, weight: .semibold))
             .foregroundColor(.orange)
             .padding(.horizontal, 6).padding(.vertical, 2)

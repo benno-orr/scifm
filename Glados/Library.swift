@@ -220,6 +220,12 @@ actor LibraryManager {
         persist()
     }
 
+    /// Source URLs of items that have been listened to the end (or marked read),
+    /// so finished articles can be hidden from the feeds.
+    func finishedSourceURLs() -> Set<String> {
+        Set(loadAll().filter { $0.isFinished }.map { $0.sourceURL })
+    }
+
     func audioData(for item: LibraryItem) -> Data? {
         try? Data(contentsOf: audioDir.appendingPathComponent(item.audioFileName))
     }

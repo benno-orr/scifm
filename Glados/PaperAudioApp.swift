@@ -30,11 +30,12 @@ struct SciFMApp: App {
                     .tag(2)
 
                 PlaylistsView(selectedTab: $selectedTab)
-                    .tabItem { Label("Playlists", systemImage: "shuffle") }
+                    .tabItem { Label("Radio", systemImage: "dot.radiowaves.left.and.right") }
                     .tag(5)
             }
             .environmentObject(playerViewModel)
             .preferredColorScheme(.dark)
+            .overlay { LandscapeArtworkOverlay() }
             .fullScreenCover(isPresented: $playerViewModel.showSeminar) {
                 SeminarCover()
                     .environmentObject(playerViewModel)

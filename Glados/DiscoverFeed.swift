@@ -301,6 +301,11 @@ actor FeedManager {
             rssURL: URL(string: "https://www.cell.com/cell/current.rss")!,
             urlMustContain: nil, dcTypesAllowed: nil
         ),
+        FeedSource(
+            name: "Nature Biotechnology", label: "Article",
+            rssURL: URL(string: "https://feeds.nature.com/nbt/rss/current")!,
+            urlMustContain: nil, dcTypesAllowed: nil
+        ),
     ]
 
     /// Recent primary research papers (Nature/Science/Cell), newest first.

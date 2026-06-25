@@ -58,7 +58,7 @@ struct APIKeySetupView: View {
                         Text(String(format: "%.2f×", playbackRate))
                             .font(.callout.monospacedDigit()).frame(width: 56, alignment: .trailing)
                     }
-                    Text("Applies to narration and playlist playback.")
+                    Text("Applies to narration and station playback.")
                         .font(.caption).foregroundColor(.secondary)
                 }
 

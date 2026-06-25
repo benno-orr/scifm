@@ -24,31 +24,48 @@ enum PlaylistSort: String, Codable, CaseIterable, Identifiable {
 }
 
 /// A user-defined (or built-in) playlist: a filter over the scraped feeds.
-struct PlaylistDef: Codable, Identifiable, Equatable {
+struct PlaylistDef: Codable, Identifiable, Equatable, Hashable {
     var id: UUID = UUID()
     var name: String
     /// Free-text scientific domain/field to filter on (LLM-matched). "" = no filter.
     var topic: String = ""
+    /// Journals included in this station. Empty = all journals (the default feed).
+    var journals: [String] = []
+    /// General content-type rules. Default included types per selected journal are
+    /// derived from this (overridable per-journal via `journalTypes`).
     var sources: [PlaylistSource] = [.articles]
     var sorts: [PlaylistSort] = [.date]
-    /// Per-journal included article types (journal name → type labels). Empty =
-    /// no journal/type restriction (everything from `sources`).
+    /// Per-journal article-type override (journal name → type labels). A journal
+    /// absent here uses the default derived from `sources`; present = explicit override.
     var journalTypes: [String: [String]] = [:]
     var builtIn: Bool = false
 
-    /// The default playlist: recent editorials, newest first, no domain filter.
+    /// The default station: recent editorials, newest first, no domain filter.
     static let recent = PlaylistDef(
         id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
-        name: "Recent", topic: "", sources: [.articles], sorts: [.date], builtIn: true)
+        name: "Recent", topic: "", journals: [], sources: [.articles], sorts: [.date], builtIn: true)
 
-    /// One-line description of the filters, shown under the playlist name.
+    /// Article types included for `journal` by the general rules alone (no override):
+    /// every catalog type of that journal whose content source is enabled.
+    func defaultTypes(for journal: String) -> [String] {
+        journalCatalog.first { $0.journal == journal }?.types
+            .filter { sources.contains($0.source) }.map(\.label) ?? []
+    }
+
+    /// The effective included types for `journal`: the explicit override if set,
+    /// else the general-rule default.
+    func resolvedTypes(for journal: String) -> [String] {
+        journalTypes[journal] ?? defaultTypes(for: journal)
+    }
+
+    /// One-line description of the filters, shown under the station name.
     var filterSummary: String {
         var parts: [String] = []
         if !topic.isEmpty { parts.append(topic) }
-        if journalTypes.isEmpty {
+        if journals.isEmpty {
             parts.append(sources.map(\.label).joined(separator: " + "))
         } else {
-            parts.append(journalTypes.keys.sorted().joined(separator: ", "))
+            parts.append(journals.joined(separator: ", "))
         }
         if !sorts.isEmpty { parts.append("by " + sorts.map(\.shortLabel).joined(separator: ", ")) }
         return parts.joined(separator: " · ")
@@ -73,6 +90,7 @@ let journalCatalog: [JournalGroup] = [
     JournalGroup(journal: "Nature", types: [
         CatalogType(label: "Research Briefing", source: .articles),
         CatalogType(label: "Research Highlight", source: .articles),
+        CatalogType(label: "Research Article", source: .abstracts),
     ]),
     JournalGroup(journal: "Science", types: [
         CatalogType(label: "Perspective", source: .articles),
@@ -80,6 +98,9 @@ let journalCatalog: [JournalGroup] = [
     ]),
     JournalGroup(journal: "Cell", types: [
         CatalogType(label: "Highlights", source: .articles),
+        CatalogType(label: "Article", source: .abstracts),
+    ]),
+    JournalGroup(journal: "Nature Biotechnology", types: [
         CatalogType(label: "Article", source: .abstracts),
     ]),
 ]
@@ -128,17 +149,37 @@ final class PlaylistStore: ObservableObject {
 /// Resolves a `PlaylistDef` into a concrete, filtered, sorted list of articles.
 enum PlaylistBuilder {
     static func articles(for def: PlaylistDef) async -> [FeedArticle] {
+        // Which content sources we actually need to fetch. With journals chosen,
+        // it's the union of their resolved types' sources; otherwise the general rules.
+        let neededSources: Set<PlaylistSource>
+        if def.journals.isEmpty {
+            neededSources = Set(def.sources)
+        } else {
+            neededSources = Set(def.journals.flatMap { j in
+                def.resolvedTypes(for: j).compactMap { label in
+                    journalCatalog.first { $0.journal == j }?.types.first { $0.label == label }?.source
+                }
+            })
+        }
+
         var items: [FeedArticle] = []
-        if def.sources.contains(.articles)  { items += await FeedManager.shared.fetchAll() }
-        if def.sources.contains(.abstracts) { items += await FeedManager.shared.fetchPrimary() }
+        if neededSources.contains(.articles)  { items += await FeedManager.shared.fetchAll() }
+        if neededSources.contains(.abstracts) { items += await FeedManager.shared.fetchPrimary() }
+
+        // Radio never includes review papers.
+        items = items.filter { !$0.label.localizedCaseInsensitiveContains("review") }
 
         // De-dupe by id (a paper could appear in more than one feed).
         var seen = Set<String>()
         items = items.filter { seen.insert($0.id).inserted }
 
-        // Journal / article-type filter (per-journal allowed type labels).
-        if !def.journalTypes.isEmpty {
-            items = items.filter { def.journalTypes[$0.source]?.contains($0.label) == true }
+        // Journal + article-type filter. With journals selected, keep only items
+        // from those journals whose type is in that journal's resolved set. With
+        // none selected (the default feed), keep everything already fetched.
+        if !def.journals.isEmpty {
+            let allowed: [String: Set<String>] = Dictionary(uniqueKeysWithValues:
+                def.journals.map { ($0, Set(def.resolvedTypes(for: $0))) })
+            items = items.filter { allowed[$0.source]?.contains($0.label) == true }
         }
 
         // Domain/field filter via the LLM, if a topic is set.

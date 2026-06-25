@@ -12,15 +12,14 @@ struct PlaylistsView: View {
     @ObservedObject private var store = PlaylistStore.shared
     @ObservedObject private var player = PlaylistPlayer.shared
     @State private var showingCreate = false
+    @State private var path: [PlaylistDef] = []
 
     var body: some View {
-        NavigationView {
+        NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 List {
                     ForEach(store.all) { def in
-                        NavigationLink {
-                            PlaylistDetailView(def: def)
-                        } label: {
+                        NavigationLink(value: def) {
                             PlaylistRow(def: def)
                         }
                         .listRowBackground(Color.rowTranslucent)
@@ -32,12 +31,28 @@ struct PlaylistsView: View {
                 if player.isActive { NowPlayingBar() }
             }
             .charcoalBackdrop()
-            .navigationTitle("Playlists")
+            .navigationTitle("Radio")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Menu {
+                        ForEach(store.all) { def in
+                            Button {
+                                if path.last != def { path.append(def) }
+                            } label: {
+                                Label(def.name, systemImage: def.builtIn ? "newspaper" : "shuffle")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingCreate = true } label: { Image(systemName: "plus") }
                 }
+            }
+            .navigationDestination(for: PlaylistDef.self) { def in
+                PlaylistDetailView(def: def)
             }
             .sheet(isPresented: $showingCreate) {
                 PlaylistEditorSheet { store.add($0) }
@@ -80,7 +95,9 @@ struct PlaylistDetailView: View {
     @ObservedObject private var player = PlaylistPlayer.shared
     @ObservedObject private var store = PlaylistStore.shared
 
-    @State private var articles: [FeedArticle] = []
+    @State private var articles: [FeedArticle] = []   // shown (finished ones removed)
+    @State private var allBuilt: [FeedArticle] = []   // full built list
+    @State private var finishedURLs: Set<String> = []
     @State private var isLoading = false
     @State private var loadError = false
     @State private var showingEdit = false
@@ -120,8 +137,16 @@ struct PlaylistDetailView: View {
                 Task { await load() }
             }
         }
-        .onAppear { if articles.isEmpty { Task { await load() } } }
+        .onAppear { if allBuilt.isEmpty { Task { await load() } } }
         .refreshable { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .libraryDidChange)) { _ in
+            Task { finishedURLs = await LibraryManager.shared.finishedSourceURLs(); applyFilter() }
+        }
+    }
+
+    /// Hides articles already listened to the end (marked read in the Library).
+    private func applyFilter() {
+        articles = allBuilt.filter { !finishedURLs.contains($0.url.absoluteString) }
     }
 
     private var list: some View {
@@ -219,9 +244,48 @@ struct PlaylistDetailView: View {
 
     private func load() async {
         isLoading = true; loadError = false
-        let built = await PlaylistBuilder.articles(for: def)
-        articles = built; loadError = built.isEmpty
+        allBuilt = await PlaylistBuilder.articles(for: def)
+        finishedURLs = await LibraryManager.shared.finishedSourceURLs()
+        applyFilter()
+        loadError = allBuilt.isEmpty
         isLoading = false
+    }
+}
+
+// MARK: - Landscape full-screen artwork
+
+/// When the phone is rotated to landscape while a playlist is playing, the
+/// current track's scraped image fills the screen (tap to play/pause).
+struct LandscapeArtworkOverlay: View {
+    @ObservedObject private var player = PlaylistPlayer.shared
+    @Environment(\.verticalSizeClass) private var vSize
+    @State private var artworkURL: URL? = nil
+
+    var body: some View {
+        if vSize == .compact, player.isActive {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let artworkURL {
+                    AsyncImage(url: artworkURL) { phase in
+                        if case .success(let img) = phase {
+                            img.resizable().scaledToFit()
+                        } else {
+                            Image(systemName: "newspaper").font(.system(size: 60)).foregroundColor(.secondary)
+                        }
+                    }
+                } else {
+                    Image(systemName: "newspaper").font(.system(size: 60)).foregroundColor(.secondary)
+                }
+            }
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture { player.togglePlayPause() }
+            .task(id: player.current?.id) {
+                if let a = player.current {
+                    artworkURL = await FeedManager.shared.fetchThumbnail(for: a)
+                }
+            }
+        }
     }
 }
 
@@ -318,10 +382,12 @@ struct PlaylistEditorSheet: View {
     @State private var id = UUID()
     @State private var name = ""
     @State private var topic = ""
+    @State private var journals: [String] = []
     @State private var sources: Set<PlaylistSource> = [.articles]
     @State private var sorts: [PlaylistSort] = [.date]
-    /// journal → selected type labels (a journal with ≥1 type is "included").
+    /// journal → explicit type-label override (absent = derive from `sources`).
     @State private var journalTypes: [String: [String]] = [:]
+    @State private var detailExpanded = false
 
     private let fieldSuggestions = ["Biology", "Chemistry", "Physics", "Medicine",
                                     "Neuroscience", "Genetics", "Immunology", "Climate"]
@@ -330,7 +396,7 @@ struct PlaylistEditorSheet: View {
         NavigationView {
             Form {
                 Section("Name") {
-                    TextField("Playlist name", text: $name)
+                    TextField("Station name", text: $name)
                 }
 
                 Section {
@@ -358,7 +424,35 @@ struct PlaylistEditorSheet: View {
                     Text("Leave blank for everything. Can be broad (biology) or specific (single-cell RNA-seq). Matched by an LLM.")
                 }
 
-                Section("Include") {
+                // 1) Journals to include (empty = all journals).
+                Section {
+                    ForEach(journals, id: \.self) { j in
+                        HStack {
+                            Text(j).foregroundColor(.primary)
+                            Spacer()
+                            Button { removeJournal(j) } label: {
+                                Image(systemName: "minus.circle.fill").foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    if !addableJournals.isEmpty {
+                        Menu {
+                            ForEach(addableJournals, id: \.self) { j in
+                                Button(j) { addJournal(j) }
+                            }
+                        } label: {
+                            Label("Add journal", systemImage: "plus.circle")
+                        }
+                    }
+                } header: {
+                    Text("Journals")
+                } footer: {
+                    Text(journals.isEmpty ? "No journals selected — includes all journals." : "Only the selected journals are included.")
+                }
+
+                // 2) General rules: which content types to include by default.
+                Section {
                     ForEach(PlaylistSource.allCases) { src in
                         Button { toggleSource(src) } label: {
                             HStack {
@@ -370,33 +464,34 @@ struct PlaylistEditorSheet: View {
                             }
                         }
                     }
+                } header: {
+                    Text("Include")
+                } footer: {
+                    Text("Sets the default article types per journal below.")
                 }
 
-                // Journals & per-journal article types
-                ForEach(journalCatalog) { group in
+                // 3) Per-journal override (collapsed by default).
+                if !journals.isEmpty {
                     Section {
-                        Button { toggleJournal(group) } label: {
-                            HStack {
-                                Text(group.journal).fontWeight(.semibold).foregroundColor(.primary)
-                                Spacer()
-                                Text(isJournalIncluded(group) ? "All" : "Off")
-                                    .font(.caption).foregroundColor(.secondary)
-                            }
-                        }
-                        ForEach(group.types, id: \.self) { t in
-                            Button { toggleType(group.journal, t) } label: {
-                                HStack {
-                                    Text(t.label).foregroundColor(.primary)
-                                    Spacer()
-                                    if isTypeOn(group.journal, t.label) {
-                                        Image(systemName: "checkmark").foregroundColor(.accentColor)
+                        DisclosureGroup("Detailed selection", isExpanded: $detailExpanded) {
+                            ForEach(journals, id: \.self) { j in
+                                Text(j).font(.caption.weight(.semibold)).foregroundColor(.secondary)
+                                ForEach(typesFor(j), id: \.self) { t in
+                                    Button { toggleType(j, t) } label: {
+                                        HStack {
+                                            Text(t.label).foregroundColor(.primary)
+                                            Spacer()
+                                            if isTypeChecked(j, t) {
+                                                Image(systemName: "checkmark").foregroundColor(.accentColor)
+                                            }
+                                        }
+                                        .padding(.leading, 8)
                                     }
                                 }
-                                .padding(.leading, 8)
                             }
                         }
-                    } header: {
-                        Text(group.journal)
+                    } footer: {
+                        Text("Overrides the general rules for specific journals. Defaults match the Include settings above.")
                     }
                 }
 
@@ -418,10 +513,10 @@ struct PlaylistEditorSheet: View {
                 } header: {
                     Text("Sort by")
                 } footer: {
-                    Text("Tap in the order you want applied (first = primary sort). Journals/types left untouched include everything.")
+                    Text("Tap in the order you want applied (first = primary sort).")
                 }
             }
-            .navigationTitle(editing == nil ? "New Playlist" : "Edit Playlist")
+            .navigationTitle(editing == nil ? "New Station" : "Edit Station")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
@@ -440,8 +535,22 @@ struct PlaylistEditorSheet: View {
     private func prefill() {
         guard let e = editing else { return }
         id = e.id; name = e.name; topic = e.topic
+        journals = e.journals
         sources = Set(e.sources); sorts = e.sorts.isEmpty ? [.date] : e.sorts
         journalTypes = e.journalTypes
+    }
+
+    // Journals
+    private var addableJournals: [String] {
+        journalCatalog.map(\.journal).filter { !journals.contains($0) }
+    }
+    private func addJournal(_ j: String) { if !journals.contains(j) { journals.append(j) } }
+    private func removeJournal(_ j: String) {
+        journals.removeAll { $0 == j }
+        journalTypes[j] = nil
+    }
+    private func typesFor(_ journal: String) -> [CatalogType] {
+        journalCatalog.first { $0.journal == journal }?.types ?? []
     }
 
     private func toggleSource(_ s: PlaylistSource) {
@@ -451,36 +560,33 @@ struct PlaylistEditorSheet: View {
         if let i = sorts.firstIndex(of: s) { sorts.remove(at: i) } else { sorts.append(s) }
     }
 
-    private func isTypeOn(_ journal: String, _ label: String) -> Bool {
-        journalTypes[journal]?.contains(label) ?? false
+    /// Default included labels for a journal from the general rules (no override).
+    private func defaultLabels(_ journal: String) -> [String] {
+        typesFor(journal).filter { sources.contains($0.source) }.map(\.label)
     }
-    private func isJournalIncluded(_ g: JournalGroup) -> Bool {
-        !(journalTypes[g.journal]?.isEmpty ?? true)
+    /// Checked = explicit override membership, else the general-rule default.
+    private func isTypeChecked(_ journal: String, _ t: CatalogType) -> Bool {
+        if let override = journalTypes[journal] { return override.contains(t.label) }
+        return sources.contains(t.source)
     }
-    /// Toggle a single type; also ensure its content source is fetched.
+    /// Toggling a type makes the journal's selection an explicit override.
     private func toggleType(_ journal: String, _ t: CatalogType) {
-        var arr = journalTypes[journal] ?? []
-        if let i = arr.firstIndex(of: t.label) { arr.remove(at: i) } else { arr.append(t.label); sources.insert(t.source) }
-        if arr.isEmpty { journalTypes[journal] = nil } else { journalTypes[journal] = arr }
-    }
-    /// Toggle all of a journal's types on/off.
-    private func toggleJournal(_ g: JournalGroup) {
-        if isJournalIncluded(g) {
-            journalTypes[g.journal] = nil
-        } else {
-            journalTypes[g.journal] = g.types.map(\.label)
-            for t in g.types { sources.insert(t.source) }
-        }
+        var set = journalTypes[journal] ?? defaultLabels(journal)
+        if let i = set.firstIndex(of: t.label) { set.remove(at: i) } else { set.append(t.label) }
+        journalTypes[journal] = set
     }
 
     private func save() {
+        // Drop overrides for journals no longer selected.
+        let pruned = journalTypes.filter { journals.contains($0.key) }
         let def = PlaylistDef(
             id: id,
             name: name.trimmingCharacters(in: .whitespaces),
             topic: topic.trimmingCharacters(in: .whitespacesAndNewlines),
+            journals: journals,
             sources: PlaylistSource.allCases.filter { sources.contains($0) },
             sorts: sorts.isEmpty ? [.date] : sorts,
-            journalTypes: journalTypes)
+            journalTypes: pruned)
         onSave(def)
         dismiss()
     }
