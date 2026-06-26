@@ -153,27 +153,31 @@ struct LibraryListView: View {
                 if item.progressFraction > 0 {
                     ProgressView(value: item.progressFraction).tint(.accentColor).padding(.top, 2)
                 }
-            } else if item.isFinished {
-                Button { setFinished(item.id, false) } label: {
-                    Label("Finished", systemImage: "checkmark.circle.fill")
-                        .font(.caption2).foregroundColor(.accentColor)
-                }
-                .buttonStyle(.plain)
             } else {
-                if item.progressFraction > 0 {
-                    ProgressView(value: item.progressFraction)
-                        .tint(.accentColor)
-                        .padding(.top, 2)
+                if !item.isFinished, item.progressFraction > 0 {
+                    ProgressView(value: item.progressFraction).tint(.accentColor).padding(.top, 2)
                 }
-                Button { setFinished(item.id, true) } label: {
-                    Label("Mark as read", systemImage: "checkmark.circle")
-                        .font(.caption2).foregroundColor(.secondary)
+                // Always-visible read/unread toggle.
+                Button { setFinished(item.id, !item.isFinished) } label: {
+                    Label(item.isFinished ? "Read — mark unread" : "Mark as read",
+                          systemImage: item.isFinished ? "checkmark.circle.fill" : "circle")
+                        .font(.caption2)
+                        .foregroundColor(item.isFinished ? .accentColor : .secondary)
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 2)
             }
         }
         .padding(.vertical, 4)
+        .swipeActions(edge: .leading) {
+            if item.contentKind != .seminar {
+                Button { setFinished(item.id, !item.isFinished) } label: {
+                    Label(item.isFinished ? "Unread" : "Read",
+                          systemImage: item.isFinished ? "circle" : "checkmark.circle")
+                }
+                .tint(item.isFinished ? .gray : .accentColor)
+            }
+        }
     }
 
     private func kindBadge(_ kind: ContentKind) -> some View {

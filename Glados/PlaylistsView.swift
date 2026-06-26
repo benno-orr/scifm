@@ -12,6 +12,7 @@ struct PlaylistsView: View {
     @ObservedObject private var store = PlaylistStore.shared
     @ObservedObject private var player = PlaylistPlayer.shared
     @State private var showingCreate = false
+    @State private var showLibrary = false
     @State private var path: [PlaylistDef] = []
 
     var body: some View {
@@ -50,6 +51,11 @@ struct PlaylistsView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingCreate = true } label: { Image(systemName: "plus") }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { withAnimation(.easeInOut(duration: 0.25)) { showLibrary = true } } label: {
+                        Image(systemName: "books.vertical")
+                    }
+                }
             }
             .navigationDestination(for: PlaylistDef.self) { def in
                 PlaylistDetailView(def: def)
@@ -58,11 +64,76 @@ struct PlaylistsView: View {
                 PlaylistEditorSheet { store.add($0) }
             }
         }
+        .rightDrawer(isOpen: $showLibrary, widthFraction: 0.75) {
+            LibraryDrawer(close: { withAnimation(.easeInOut(duration: 0.25)) { showLibrary = false } })
+        }
     }
 
     /// Only user-created playlists (offset by 1 for the built-in "Recent") delete.
     private func deleteCustom(at offsets: IndexSet) {
         for i in offsets where i >= 1 { store.delete(store.all[i]) }
+    }
+}
+
+// MARK: - Right-side Library drawer (Feedly-style)
+
+/// The Library shown in a slide-out drawer (used from the Radio tab).
+struct LibraryDrawer: View {
+    let close: () -> Void
+    var body: some View {
+        NavigationView {
+            LibraryListView()
+                .navigationTitle("Library")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button { close() } label: { Image(systemName: "xmark") }
+                    }
+                }
+        }
+    }
+}
+
+extension View {
+    /// Presents `drawer` as a panel sliding in from the right edge, covering
+    /// `widthFraction` of the width, with a dimmed tap-to-dismiss backdrop.
+    func rightDrawer<DrawerContent: View>(
+        isOpen: Binding<Bool>, widthFraction: CGFloat,
+        @ViewBuilder drawer: @escaping () -> DrawerContent) -> some View {
+        modifier(RightDrawerModifier(isOpen: isOpen, widthFraction: widthFraction, drawer: drawer))
+    }
+}
+
+private struct RightDrawerModifier<DrawerContent: View>: ViewModifier {
+    @Binding var isOpen: Bool
+    let widthFraction: CGFloat
+    let drawer: () -> DrawerContent
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if isOpen {
+                GeometryReader { geo in
+                    ZStack(alignment: .trailing) {
+                        Color.black.opacity(0.35)
+                            .ignoresSafeArea()
+                            .onTapGesture { withAnimation(.easeInOut(duration: 0.25)) { isOpen = false } }
+                            .transition(.opacity)
+                        drawer()
+                            .frame(width: geo.size.width * widthFraction)
+                            .frame(maxHeight: .infinity)
+                            .background(Color(.systemBackground))
+                            .transition(.move(edge: .trailing))
+                            .gesture(
+                                DragGesture().onEnded { v in
+                                    if v.translation.width > 60 {
+                                        withAnimation(.easeInOut(duration: 0.25)) { isOpen = false }
+                                    }
+                                }
+                            )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -424,29 +495,24 @@ struct PlaylistEditorSheet: View {
                     Text("Leave blank for everything. Can be broad (biology) or specific (single-cell RNA-seq). Matched by an LLM.")
                 }
 
-                // 1) Journals to include (empty = all journals).
+                // 1) Journals to include (empty = all journals). Multi-select menu.
                 Section {
-                    ForEach(journals, id: \.self) { j in
+                    Menu {
+                        ForEach(journalCatalog.map(\.journal), id: \.self) { j in
+                            Button { toggleJournal(j) } label: {
+                                Label(j, systemImage: journals.contains(j) ? "checkmark" : "")
+                            }
+                        }
+                    } label: {
                         HStack {
-                            Text(j).foregroundColor(.primary)
+                            Text("Journals")
                             Spacer()
-                            Button { removeJournal(j) } label: {
-                                Image(systemName: "minus.circle.fill").foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.plain)
+                            Text(journals.isEmpty ? "All" : journals.joined(separator: ", "))
+                                .foregroundColor(.secondary).lineLimit(1)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption).foregroundColor(.secondary)
                         }
                     }
-                    if !addableJournals.isEmpty {
-                        Menu {
-                            ForEach(addableJournals, id: \.self) { j in
-                                Button(j) { addJournal(j) }
-                            }
-                        } label: {
-                            Label("Add journal", systemImage: "plus.circle")
-                        }
-                    }
-                } header: {
-                    Text("Journals")
                 } footer: {
                     Text(journals.isEmpty ? "No journals selected — includes all journals." : "Only the selected journals are included.")
                 }
@@ -541,13 +607,13 @@ struct PlaylistEditorSheet: View {
     }
 
     // Journals
-    private var addableJournals: [String] {
-        journalCatalog.map(\.journal).filter { !journals.contains($0) }
-    }
-    private func addJournal(_ j: String) { if !journals.contains(j) { journals.append(j) } }
-    private func removeJournal(_ j: String) {
-        journals.removeAll { $0 == j }
-        journalTypes[j] = nil
+    private func toggleJournal(_ j: String) {
+        if journals.contains(j) {
+            journals.removeAll { $0 == j }
+            journalTypes[j] = nil          // drop any per-journal override
+        } else {
+            journals.append(j)
+        }
     }
     private func typesFor(_ journal: String) -> [CatalogType] {
         journalCatalog.first { $0.journal == journal }?.types ?? []

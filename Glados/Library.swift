@@ -104,6 +104,35 @@ actor LibraryManager {
     /// Cached audio is evicted this long after an item was last touched.
     private let evictionInterval: TimeInterval = 7 * 24 * 3600
 
+    /// Collapses pre-existing duplicate entries (same non-empty source URL),
+    /// keeping the most-progressed/most-recently-touched one. One-time cleanup
+    /// for libraries saved before saves became an upsert.
+    private func dedupeBySourceURL() {
+        var bestByURL: [String: LibraryItem] = [:]
+        var result: [LibraryItem] = []
+        var removed = false
+        for item in items {
+            let url = item.sourceURL
+            guard !url.isEmpty else { result.append(item); continue }
+            if let existing = bestByURL[url] {
+                removed = true
+                // Prefer the finished / further-progressed / more-recent copy.
+                let keepNew = (item.isFinished && !existing.isFinished)
+                    || item.lastPlayedTime > existing.lastPlayedTime
+                    || item.touchedDate > existing.touchedDate
+                let winner = keepNew ? item : existing
+                let loser  = keepNew ? existing : item
+                try? FileManager.default.removeItem(at: audioDir.appendingPathComponent(loser.audioFileName))
+                bestByURL[url] = winner
+                if let i = result.firstIndex(where: { $0.sourceURL == url }) { result[i] = winner }
+            } else {
+                bestByURL[url] = item
+                result.append(item)
+            }
+        }
+        if removed { items = result; persist() }
+    }
+
     func loadAll() -> [LibraryItem] {
         if !isLoaded {
             if let data = try? Data(contentsOf: metadataURL),
@@ -111,6 +140,7 @@ actor LibraryManager {
                 items = decoded
             }
             isLoaded = true
+            dedupeBySourceURL()
         }
         pruneStale()
         return items
@@ -135,11 +165,34 @@ actor LibraryManager {
         persist()
     }
 
+    /// Existing entry for this source URL, if any. Each article is unique by its
+    /// source URL, so saves upsert rather than duplicate. Empty URLs never match.
+    private func index(forSourceURL sourceURL: String) -> Int? {
+        guard !sourceURL.isEmpty else { return nil }
+        return items.firstIndex { $0.sourceURL == sourceURL }
+    }
+
     func save(title: String, sourceURL: String, wavData: Data,
               sentences: [StoredSentence], duration: TimeInterval,
               kind: ContentKind = .other, panels: [StoredPanel]? = nil,
               fromPlaylist: Bool = false, finished: Bool = false) -> LibraryItem {
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+
+        // Upsert: reuse the existing entry for this URL instead of duplicating.
+        if let idx = index(forSourceURL: sourceURL) {
+            try? wavData.write(to: audioDir.appendingPathComponent(items[idx].audioFileName))
+            items[idx].title = title
+            items[idx].duration = duration
+            items[idx].sentences = sentences
+            items[idx].kind = kind
+            if let panels { items[idx].panels = panels }
+            if fromPlaylist { items[idx].fromPlaylist = true }
+            if finished { items[idx].markedFinished = true; items[idx].lastPlayedTime = duration }
+            items[idx].lastTouched = Date()
+            persist()
+            return items[idx]
+        }
+
         let id = UUID()
         let fileName = "\(id.uuidString).wav"
         try? wavData.write(to: audioDir.appendingPathComponent(fileName))
@@ -158,7 +211,14 @@ actor LibraryManager {
 
     /// Creates a Library entry the moment generation starts, so the doc shows
     /// up (under Reading) immediately. Audio is written later by `finalizeEntry`.
+    /// Reuses an existing entry for the same source URL (no duplicates).
     func startEntry(title: String, sourceURL: String, kind: ContentKind) -> LibraryItem {
+        if let idx = index(forSourceURL: sourceURL) {
+            items[idx].kind = kind
+            items[idx].lastTouched = Date()
+            persist()
+            return items[idx]
+        }
         let id = UUID()
         let item = LibraryItem(id: id, title: title, sourceURL: sourceURL,
                                dateAdded: Date(), duration: 0,
