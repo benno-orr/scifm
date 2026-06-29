@@ -312,21 +312,12 @@ private struct CharcoalBackdrop: ViewModifier {
             .scrollContentBackground(.hidden)
             .background(
                 ZStack {
-                    LinearGradient(
-                        colors: [Color(red: 0.11, green: 0.11, blue: 0.12),
-                                 Color(red: 0.04, green: 0.04, blue: 0.05)],
-                        startPoint: .top, endPoint: .bottom)
-                    RadialGradient(
-                        colors: [Color.white.opacity(0.05), .clear],
-                        center: .top, startRadius: 0, endRadius: 520)
-                    GeometryReader { geo in
-                        Image("LogoMark")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: geo.size.width * 1.5)
-                            .opacity(0.25)
-                            .frame(width: geo.size.width, height: geo.size.height)
-                    }
+                    Color.black
+                    Image("LaunchBackground")
+                        .resizable()
+                        .scaledToFill()
+                    // Dark scrim so list text/rows stay legible over the art.
+                    Color.black.opacity(0.5)
                 }
                 .ignoresSafeArea()
             )
