@@ -313,10 +313,12 @@ private struct CharcoalBackdrop: ViewModifier {
             .background(
                 ZStack {
                     Color.black
+                    // Fit (not fill) shows the whole image and keeps a consistent,
+                    // width-based scale across screens (no zoom jump).
                     Image("LaunchBackground")
                         .resizable()
-                        .scaledToFill()
-                    // Dark scrim so list text/rows stay legible over the art.
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Color.black.opacity(0.5)
                 }
                 .ignoresSafeArea()

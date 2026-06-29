@@ -39,15 +39,21 @@ struct SciFMApp: App {
             .overlay { LandscapeArtworkOverlay() }
             .overlay {
                 if showSplash {
-                    Image("LaunchBackground")
-                        .resizable()
-                        .scaledToFill()
-                        .ignoresSafeArea()
-                        .transition(.opacity)
-                        .task {
-                            try? await Task.sleep(nanoseconds: 1_000_000_000)
-                            withAnimation(.easeOut(duration: 0.4)) { showSplash = false }
-                        }
+                    ZStack {
+                        Color.black
+                        Image("LaunchBackground")
+                            .resizable()
+                            .scaledToFit()
+                    }
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation(.easeOut(duration: 0.4)) { showSplash = false } }
+                    .transition(.opacity)
+                    .task {
+                        // Held for 2 minutes (tap to dismiss sooner).
+                        try? await Task.sleep(nanoseconds: 120_000_000_000)
+                        withAnimation(.easeOut(duration: 0.4)) { showSplash = false }
+                    }
                 }
             }
             .fullScreenCover(isPresented: $playerViewModel.showSeminar) {
