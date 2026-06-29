@@ -8,6 +8,7 @@ struct SciFMApp: App {
     @StateObject private var playerViewModel = PlayerViewModel()
     @State private var incomingURL: URL? = nil
     @State private var selectedTab = 0
+    @State private var showSplash = true
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -36,6 +37,19 @@ struct SciFMApp: App {
             .environmentObject(playerViewModel)
             .preferredColorScheme(.dark)
             .overlay { LandscapeArtworkOverlay() }
+            .overlay {
+                if showSplash {
+                    Image("LaunchBackground")
+                        .resizable()
+                        .scaledToFill()
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                        .task {
+                            try? await Task.sleep(nanoseconds: 1_000_000_000)
+                            withAnimation(.easeOut(duration: 0.4)) { showSplash = false }
+                        }
+                }
+            }
             .fullScreenCover(isPresented: $playerViewModel.showSeminar) {
                 SeminarCover()
                     .environmentObject(playerViewModel)
