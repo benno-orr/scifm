@@ -50,8 +50,8 @@ struct SciFMApp: App {
                     .onTapGesture { withAnimation(.easeOut(duration: 0.4)) { showSplash = false } }
                     .transition(.opacity)
                     .task {
-                        // Held for 2 minutes (tap to dismiss sooner).
-                        try? await Task.sleep(nanoseconds: 120_000_000_000)
+                        // Brief hold, then fade into the app (tap to dismiss sooner).
+                        try? await Task.sleep(nanoseconds: 1_400_000_000)
                         withAnimation(.easeOut(duration: 0.4)) { showSplash = false }
                     }
                 }

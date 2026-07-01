@@ -23,7 +23,7 @@ struct FeedSource {
     let dcTypesAllowed: Set<String>?
 }
 
-struct FeedArticle: Identifiable {
+struct FeedArticle: Identifiable, Codable {
     let id: String
     let title: String
     let summary: String

@@ -198,7 +198,7 @@ struct PlaylistDetailView: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if isLoading { ProgressView().scaleEffect(0.8) }
-                else { Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") } }
+                else { Button { Task { await load(forceRebuild: true) } } label: { Image(systemName: "arrow.clockwise") } }
             }
         }
         .sheet(isPresented: $showingEdit) {
@@ -209,7 +209,7 @@ struct PlaylistDetailView: View {
             }
         }
         .onAppear { if allBuilt.isEmpty { Task { await load() } } }
-        .refreshable { await load() }
+        .refreshable { await load(forceRebuild: true) }
         .onReceive(NotificationCenter.default.publisher(for: .libraryDidChange)) { _ in
             Task { finishedURLs = await LibraryManager.shared.finishedSourceURLs(); applyFilter() }
         }
@@ -313,13 +313,29 @@ struct PlaylistDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func load() async {
+    private func load(forceRebuild: Bool = false) async {
         isLoading = true; loadError = false
-        allBuilt = await PlaylistBuilder.articles(for: def)
+
+        // Prefer the saved snapshot: reopening a station loads instantly with no
+        // feed re-fetch, no LLM re-classification, and no re-scrape. Only rebuild
+        // when explicitly refreshed or when there's no snapshot yet.
+        if !forceRebuild, let saved = await PlaylistSnapshotStore.shared.articles(for: def.id.uuidString) {
+            allBuilt = saved
+        } else {
+            allBuilt = await PlaylistBuilder.articles(for: def)
+            if !allBuilt.isEmpty {
+                await PlaylistSnapshotStore.shared.store(allBuilt, for: def.id.uuidString)
+            }
+        }
+
         finishedURLs = await LibraryManager.shared.finishedSourceURLs()
         applyFilter()
         loadError = allBuilt.isEmpty
         isLoading = false
+        // Pre-scrape full text + images for every article now, so playback never
+        // hits a paywall (uses the logged-in session via hidden web views).
+        // Cached URLs are skipped, so this is a no-op once everything is scraped.
+        HeadlessScraper.shared.enqueue(articles.map(\.url))
     }
 }
 
@@ -353,7 +369,11 @@ struct LandscapeArtworkOverlay: View {
             .onTapGesture { player.togglePlayPause() }
             .task(id: player.current?.id) {
                 if let a = player.current {
-                    artworkURL = await FeedManager.shared.fetchThumbnail(for: a)
+                    if let local = await ScrapedStore.shared.imageURL(for: a.url.absoluteString) {
+                        artworkURL = local
+                    } else {
+                        artworkURL = await FeedManager.shared.fetchThumbnail(for: a)
+                    }
                 }
             }
         }
@@ -438,7 +458,11 @@ struct NowPlayingBar: View {
 
     private func loadArtwork() async {
         guard let article = player.current else { artworkURL = nil; return }
-        artworkURL = await FeedManager.shared.fetchThumbnail(for: article)
+        if let local = await ScrapedStore.shared.imageURL(for: article.url.absoluteString) {
+            artworkURL = local
+        } else {
+            artworkURL = await FeedManager.shared.fetchThumbnail(for: article)
+        }
     }
 }
 

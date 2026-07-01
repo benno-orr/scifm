@@ -38,6 +38,7 @@
 		9D34414B6C0FDAE692BC9D40 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8629C1C3731A00A715344F55 /* MediaPlayer.framework */; };
 		9E93CD4A9C893A80AA0CBB0C /* ArticleFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B34331B97B3AD0BB03B797 /* ArticleFlowView.swift */; };
 		AA8F525BFA17746650F4241B /* AbstractPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46713E2D49B471D470C45757 /* AbstractPlayer.swift */; };
+		AD296C2140326A3C17FAECC6 /* ArticleScraper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EAF2AB4DB5896773DD2CF2A /* ArticleScraper.swift */; };
 		B07672A20920A2231AEE9B97 /* FigurePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78D3E8D1E1A61259C1B2008E /* FigurePlayerView.swift */; };
 		B2F8B335CAA6F95ED009A037 /* WebReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D777C0B25E8DED5EC21DBA59 /* WebReaderView.swift */; };
 		BBE8B5E314197FA39AFB52E0 /* Library.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F966D91E473E8D73E03A027 /* Library.swift */; };
@@ -91,6 +92,7 @@
 		2759748B908898DE63F462A2 /* Cost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cost.swift; sourceTree = "<group>"; };
 		27898958A86B2C95135D0D7E /* PlaylistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsView.swift; sourceTree = "<group>"; };
 		2DAFB0460AB9441C13D0E69E /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		2EAF2AB4DB5896773DD2CF2A /* ArticleScraper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArticleScraper.swift; sourceTree = "<group>"; };
 		31CCD5EBF92A22A759AEB54D /* AudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTests.swift; sourceTree = "<group>"; };
 		3F40830FAA2B4BDE86CEC071 /* PlaylistStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistStore.swift; sourceTree = "<group>"; };
 		3F59366C0D8410E0DAF0145C /* PrimaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryView.swift; sourceTree = "<group>"; };
@@ -167,6 +169,7 @@
 				6ADC51A2D3B41101102E5FE2 /* AppSettings.swift */,
 				19B34331B97B3AD0BB03B797 /* ArticleFlowView.swift */,
 				FFE24A8ED78B2C40D683159A /* ArticleProcessor.swift */,
+				2EAF2AB4DB5896773DD2CF2A /* ArticleScraper.swift */,
 				A9278CF4ED19EEFCF46639C1 /* Assets.xcassets */,
 				84722524C70A8D13CE3F521F /* AudioStreamPlayer.swift */,
 				2759748B908898DE63F462A2 /* Cost.swift */,
@@ -379,6 +382,7 @@
 				5C335BC05EF698E132E1D4CF /* AppSettings.swift in Sources */,
 				9E93CD4A9C893A80AA0CBB0C /* ArticleFlowView.swift in Sources */,
 				86034331E4CB8DB660CCD8BC /* ArticleProcessor.swift in Sources */,
+				AD296C2140326A3C17FAECC6 /* ArticleScraper.swift in Sources */,
 				C85344162D5CCB3ABFFE51A1 /* AudioStreamPlayer.swift in Sources */,
 				98AA2006A3D48B83BDF72B83 /* Cost.swift in Sources */,
 				1D7CD0EFCA82F692BB896779 /* DeepgramTTS.swift in Sources */,

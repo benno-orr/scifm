@@ -125,10 +125,15 @@ final class PlaylistStore: ObservableObject {
     func update(_ def: PlaylistDef) {
         guard let i = custom.firstIndex(where: { $0.id == def.id }) else { return }
         custom[i] = def; save()
+        // Filters changed → the saved article list is stale.
+        let id = def.id.uuidString
+        Task { await PlaylistSnapshotStore.shared.remove(id) }
     }
 
     func delete(_ def: PlaylistDef) {
         custom.removeAll { $0.id == def.id }; save()
+        let id = def.id.uuidString
+        Task { await PlaylistSnapshotStore.shared.remove(id) }
     }
 
     private func load() {
@@ -141,6 +146,54 @@ final class PlaylistStore: ObservableObject {
         if let data = try? JSONEncoder().encode(custom) {
             UserDefaults.standard.set(data, forKey: key)
         }
+    }
+}
+
+// MARK: - Snapshot store
+
+/// Persists the *resolved* article list for each station to disk, so reopening a
+/// station loads instantly (no feed re-fetch, no LLM re-classification, no
+/// re-scrape). Rebuilt only on an explicit refresh. Keyed by playlist id.
+actor PlaylistSnapshotStore {
+    static let shared = PlaylistSnapshotStore()
+
+    private var map: [String: [FeedArticle]] = [:]
+    private var loaded = false
+
+    private var fileURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("playlist_snapshots.json")
+    }
+
+    private func loadIfNeeded() {
+        guard !loaded else { return }
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode([String: [FeedArticle]].self, from: data) {
+            map = decoded
+        }
+        loaded = true
+    }
+
+    /// Saved article list for a station, if one exists.
+    func articles(for id: String) -> [FeedArticle]? {
+        loadIfNeeded()
+        return map[id]
+    }
+
+    func store(_ articles: [FeedArticle], for id: String) {
+        loadIfNeeded()
+        map[id] = articles
+        persist()
+    }
+
+    func remove(_ id: String) {
+        loadIfNeeded()
+        map[id] = nil
+        persist()
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(map) { try? data.write(to: fileURL) }
     }
 }
 

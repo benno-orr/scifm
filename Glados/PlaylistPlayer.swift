@@ -29,13 +29,15 @@ final class PlaylistPlayer: ObservableObject {
     /// article.ids the user bookmarked for "Read Later" this session (drives the
     /// now-playing bookmark button; the Library flag is the source of truth).
     @Published private(set) var readLaterIDs: Set<String> = []
-    /// article.id → pre-synthesized WAV, prepared while the prior track plays.
+    /// article.id → pre-synthesized WAV, prepared while earlier tracks play.
     private var prefetched: [String: Data] = [:]
+    /// article.ids whose synthesis failed, so we don't retry them forever.
+    private var prefetchFailed: Set<String> = []
     private var prefetchTask: Task<Void, Never>? = nil
-    /// Polls playback position to trigger prefetch near the end of a track.
+    /// Polls playback position to keep the prefetch queue topped up.
     private var progressTimer: Timer?
-    /// Seconds before a track ends at which we begin prepping the next one.
-    private let prefetchLead: TimeInterval = 30
+    /// How many upcoming tracks to keep synthesized ahead of the current one.
+    private let prefetchDepth = 5
 
     /// The article currently cued/playing, if any.
     var current: FeedArticle? { queue.indices.contains(index) ? queue[index] : nil }
@@ -190,6 +192,7 @@ final class PlaylistPlayer: ObservableObject {
         loadTask?.cancel(); loadTask = nil
         prefetchTask?.cancel(); prefetchTask = nil
         prefetched.removeAll()
+        prefetchFailed.removeAll()
         progressTimer?.invalidate(); progressTimer = nil
         audioPlayer?.stop(); audioPlayer = nil
         state = .idle
@@ -237,6 +240,7 @@ final class PlaylistPlayer: ObservableObject {
                 audioPlayer = player
                 state = .playing
                 startProgressMonitor()
+                ensurePrefetch()
                 updateNowPlaying()
                 await saveToLibrary(article, wav: wav, duration: player.duration)
             } catch {
@@ -251,7 +255,13 @@ final class PlaylistPlayer: ObservableObject {
     /// and the title, then a short verbal pause, then the body. nil if the body
     /// is empty or synthesis fails.
     private func synthesizeWav(for article: FeedArticle) async -> Data? {
-        let body = await FeedManager.shared.readingText(for: article)
+        // Prefer locally-scraped full text (past the paywall); fall back to the feed.
+        let body: String
+        if let scraped = await ScrapedStore.shared.text(for: article.url.absoluteString) {
+            body = scraped
+        } else {
+            body = await FeedManager.shared.readingText(for: article)
+        }
         guard !body.isEmpty else { return nil }
         let intro = Self.introLine(for: article)
         do {
@@ -291,31 +301,42 @@ final class PlaylistPlayer: ObservableObject {
         return f
     }()
 
-    /// Polls the current track's position; once within `prefetchLead` of the end,
-    /// begins synthesizing the next track so playback is gapless.
+    /// Keeps the prefetch queue topped up as playback progresses (a safety net
+    /// in case a synthesis finished while no new track started).
     private func startProgressMonitor() {
         progressTimer?.invalidate()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+            Task { @MainActor in self?.ensurePrefetch() }
         }
     }
 
-    private func tick() {
-        guard let p = audioPlayer, state == .playing else { return }
-        if p.duration - p.currentTime <= prefetchLead { prefetchNext() }
+    /// Synthesizes the next `prefetchDepth` tracks ahead of the current one, one
+    /// at a time, caching each WAV. Runs as long as there's an uncached upcoming
+    /// track in range — including while audio plays in the background.
+    private func ensurePrefetch() {
+        guard prefetchTask == nil else { return }
+        prefetchTask = Task { [weak self] in
+            guard let self else { return }
+            while let target = self.nextPrefetchTarget() {
+                if let wav = await self.synthesizeWav(for: target) {
+                    self.prefetched[target.id] = wav
+                } else {
+                    self.prefetchFailed.insert(target.id)   // don't retry endlessly
+                }
+            }
+            self.prefetchTask = nil
+        }
     }
 
-    /// Synthesizes the next track in the background (once), caching its WAV.
-    private func prefetchNext() {
-        let n = index + 1
-        guard queue.indices.contains(n), prefetchTask == nil else { return }
-        let next = queue[n]
-        guard prefetched[next.id] == nil else { return }
-        prefetchTask = Task {
-            let wav = await synthesizeWav(for: next)
-            if let wav { prefetched[next.id] = wav }
-            prefetchTask = nil
+    /// The nearest upcoming track (within `prefetchDepth`) not yet cached or failed.
+    private func nextPrefetchTarget() -> FeedArticle? {
+        let upper = min(index + prefetchDepth, queue.count - 1)
+        guard index + 1 <= upper else { return nil }
+        for i in (index + 1)...upper {
+            let a = queue[i]
+            if prefetched[a.id] == nil && !prefetchFailed.contains(a.id) { return a }
         }
+        return nil
     }
 
     /// Persists a now-playing track to the Library as a Playlist-tagged entry
